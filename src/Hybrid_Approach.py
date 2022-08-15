@@ -2,7 +2,7 @@ import scipy.stats as st
 import tensorflow as tf
 import numpy as np
 import yfinance as yf
-from model.module import *
+from src.model.module import *
 
 tf.keras.backend.clear_session()
 tf.random.set_seed(51)
