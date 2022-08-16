@@ -8,16 +8,10 @@ tf.keras.backend.clear_session()
 tf.random.set_seed(51)
 np.random.seed(51)
 
-
 stock_prices = yf.download("AAPL")
 SPY = yf.download("SPY", start="2001-11-30")["Close"]
 
-
-type(SPY)
-
-
 close = stock_prices["Close"]
-
 
 stock_prices.drop("Close", 1, inplace=True)
 stock_prices["Close"] = close
