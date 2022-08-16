@@ -19,7 +19,6 @@ stock_prices["Close"] = close
 
 stock_prices.head(20)
 
-
 rets = np.log(stock_prices["Close"] / stock_prices["Close"].shift(1))
 vol = np.array(stock_prices["2019-01-01":"2022-01-27"]["Volume"])
 
