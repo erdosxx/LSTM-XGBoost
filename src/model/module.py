@@ -1,13 +1,5 @@
 from datetime import timedelta
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression, Lasso, Ridge
-from sklearn.metrics import mean_absolute_error, accuracy_score
-from sklearn.model_selection import GridSearchCV
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.svm import SVR
-from xgboost import plot_importance, plot_tree
-import joblib
+from sklearn.metrics import mean_absolute_error
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -52,7 +44,7 @@ def feature_engineering(
 
 
 def features(data: DataFrame, SPY: Series) -> DataFrame:
-    for i in [2, 3, 4, 5, 6, 7]:
+    for i in range(2, 8):
         # Rolling Mean
         data[f"Adj_Close{i}"] = data["Adj Close"].rolling(i).mean()
         data[f"Volume{i}"] = data["Volume"].rolling(i).mean()
@@ -87,7 +79,9 @@ def features(data: DataFrame, SPY: Series) -> DataFrame:
     data["Lower_Shape"] = np.minimum(data["Open"], data["Close"]) - data["Low"]
 
     data["Close_y"] = data["Close"]
-    data.drop("Close", 1, inplace=True)
+    # data.drop(labels="Close", axis=1, inplace=True)  # Rename?
+    data.drop("Close", 1, inplace=True)  # Rename?
+    #data.dropna(axis=0, inplace=True)
     data.dropna(0, inplace=True)
     return data
 
@@ -133,10 +127,10 @@ def windowing(
         X_test.append(X)
         y_test.append(y)
 
-    return X_train, y_train, X_test, y_test
+    return [X_train, y_train, X_test, y_test]
 
 
-def train_test_split(data: DataFrame, WINDOW: int):
+def train_test_split(data: DataFrame, WINDOW: int) -> list[DataFrame]:
     """
     Divides the training set into train and validation set depending
     on the percentage indicated.
@@ -151,21 +145,22 @@ def train_test_split(data: DataFrame, WINDOW: int):
         - Train/Validation Set
         - Test Set
     """
-    train = stock_prices.iloc[:-WINDOW]
-    test = stock_prices.iloc[-WINDOW:]
+    train = data.iloc[:-WINDOW]
+    test = data.iloc[-WINDOW:]
 
-    return train, test
+    return [train, test]
 
 
-def train_validation_split(train: DataFrame, percentage: float):
+def train_validation_split(train: DataFrame, percentage: float) -> list[np.array]:
     """
     Divides the training set into train and validation set depending
     on the percentage indicated
     """
-    train_set = np.array(train.iloc[: int(len(train) * percentage)])
-    validation_set = np.array(train.iloc[int(len(train) * percentage) :])
+    threshold = int(len(train) * percentage)
+    train_set = np.array(train.iloc[: threshold])
+    validation_set = np.array(train.iloc[threshold :])
 
-    return train_set, validation_set
+    return [train_set, validation_set]
 
 
 def plotting(
@@ -331,7 +326,7 @@ def predictions(mae_lstm, mae_xgboost, prediction_xgb, prediction_lstm):
     return prediction
 
 
-def sp500_log_rets(tickers):
+def sp500_log_rets(tickers: list[str]) -> dict[str, Series]:
     """
     Returns the logarithmic returns from the SP500
     """
@@ -340,14 +335,14 @@ def sp500_log_rets(tickers):
         "Close"
     ]
     log_rets = {}
-    for index, ticker in enumerate(tickers):
+    for ticker in tickers:
         log_rets[ticker] = np.log(
             stock_prices[ticker] / stock_prices[ticker].shift(1)
         )
     return log_rets
 
 
-def annualized_rets(r):
+def annualized_rets(r: Series) -> np.float64:
     """
     Annualizes a set of returns
     We should infer the periods per year
@@ -359,22 +354,7 @@ def annualized_rets(r):
     return compounded_growth ** (255 / n_periods) - 1
 
 
-def log_returns(train, percentage):
-    """
-    Returns log returns
-    """
-    train_logrets = np.log(
-        train.iloc[: int(len(train) * percentage)]["Close_y"]
-        / train.iloc[: int(len(train) * percentage)]["Close_y"].shift(1)
-    )
-    val_logrets = np.log(
-        train.iloc[int(len(train) * percentage) :]["Close_y"]
-        / train.iloc[int(len(train) * percentage) :]["Close_y"].shift(1)
-    )
-    return train_logrets, val_logrets
-
-
-def xgb_model(X_train, y_train, X_val, y_val, plotting=False):
+def xgb_model_fun(X_train, y_train, X_val, y_val, plotting=False):
     """
     Trains a preoptimized XGBoost model and
     returns the Mean Absolute Error a plot if needed
@@ -400,7 +380,7 @@ def xgb_model(X_train, y_train, X_val, y_val, plotting=False):
     return mae, xgb_model
 
 
-def lstm_model(
+def lstm_model_fun(
     X_train, y_train, X_val, y_val, EPOCH, BATCH_SIZE, CALLBACK, plotting=False
 ):
     class myCallback(tf.keras.callbacks.Callback):

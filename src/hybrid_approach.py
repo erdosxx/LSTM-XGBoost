@@ -1,26 +1,66 @@
 import scipy.stats as st
+
+# for warning message like this: oneDNN custom ...
+# Ref: https://blog.tensorflow.org/2022/05/whats-new-in-tensorflow-29.html
 import tensorflow as tf
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error
+import xgboost as xgb
+from xgboost import plot_importance
+import joblib
 import numpy as np
 import yfinance as yf
-from src.model.module import *
+from src.model.module import (
+    feature_engineering,
+    windowing,
+    train_test_split,
+    train_validation_split,
+    plotting,
+    inverse_transformation,
+    window_optimization,
+    predictions,
+    sp500_log_rets,
+    annualized_rets,
+    xgb_model_fun,
+    lstm_model_fun,
+)
 
+# https://www.tensorflow.org/api_docs/python/tf/keras/backend/clear_session
 tf.keras.backend.clear_session()
 tf.random.set_seed(51)
 np.random.seed(51)
 
-stock_prices = yf.download("AAPL")
-SPY = yf.download("SPY", start="2001-11-30")["Close"]
+stock_prices = yf.download(tickers="AAPL")
+stock_prices
+stock_prices.head(20)
+
+stock_prices.describe()
+type(stock_prices)
+
+SPY = yf.download(tickers="SPY", start="2001-11-30")["Close"]
+SPY.head()
 
 close = stock_prices["Close"]
 
-stock_prices.drop("Close", 1, inplace=True)
-stock_prices["Close"] = close
-
+stock_prices.drop(labels="Close", axis=1, inplace=True)
+stock_prices
+stock_prices["Close"] = close  # <--- put Close in last
+# stock_prices = stock_prices[["Open", "High", "Low", "Adj Close", "Volume", "Close"]]
 
 stock_prices.head(20)
 
+stock_prices["Close"].head()
+stock_prices["Close"].shift(1).head()
+stock_prices["1980-12-12":"1980-12-16"]["Volume"]
+stock_prices["2019-01-01":"2022-01-27"]["Volume"]
+
 rets = np.log(stock_prices["Close"] / stock_prices["Close"].shift(1))
+type(rets)
 vol = np.array(stock_prices["2019-01-01":"2022-01-27"]["Volume"])
+type(vol)
 
 
 stock_prices.describe()
@@ -30,6 +70,7 @@ tickers = ["AAPL", "MSFT", "TSLA", "AMZN", "SPY"]
 
 
 log_rets = sp500_log_rets(tickers)
+log_rets
 
 
 # Annual rets for the selected tickers
@@ -38,39 +79,53 @@ for ticker in log_rets.keys():
     ann_rets[ticker] = (
         str(round(annualized_rets(log_rets[ticker]) * 100, 2)) + "%"
     )
-ann_rets
+log_rets["SPY"].shape
 
 
-fig, ax = plt.subplots(1, 2, figsize=(15, 6))
-fig.patch.set_alpha(0.2)
-for i in log_rets.keys():
-    if i == "AAPL":
-        mu = np.mean(log_rets["AAPL"])
-        sigma = np.std(log_rets["AAPL"])
-        x = np.linspace(mu - 5 * sigma, mu + 5 * sigma, 1000)
-        pdf = st.norm.pdf(x, mu, sigma)
-        ax[1].plot(x, pdf, lw=2, color="black")
-        ax[1].hist(log_rets[i], bins=40, color="red")
-        ax[0].boxplot(stock_prices["Close"])
-        ax[0].set_title("Box plot log returns")
-        ax[1].set_title("Log returns ditribution")
-    else:
-        ax[1].hist(log_rets[i], bins=40, color="grey", alpha=0.3)
-        ax[0].set_title("Box plot log returns")
-        ax[1].set_title("Log returns ditribution")
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(15, 6))
+# fig.patch.set_alpha(0.2)  # set graph transperancy 0-1, 1 is default
+plot_log_returns = ax[0]
+plot_log_returns_dist = ax[1]
+
+mu = np.mean(log_rets["AAPL"])
+sigma = np.std(log_rets["AAPL"])
+x = np.linspace(start=mu - 5 * sigma, stop=mu + 5 * sigma, num=1000)
+pdf = st.norm.pdf(x=x, loc=mu, scale=sigma)
+plot_log_returns_dist.plot(x, pdf, linewidth=1, color="black")
+plot_log_returns.boxplot(stock_prices["Close"])
+
+for ticker in log_rets.keys():
+    (color, alpha) = ("red", 0.8) if ticker == "AAPL" else ("grey", 0.3)
+    plot_log_returns_dist.hist(
+        log_rets[ticker], bins=40, color=color, alpha=alpha
+    )
+
+plot_log_returns.set_title("Box plot log returns")
+plot_log_returns_dist.set_title("Log returns distribution")
 
 
-fig, ax = plt.subplots(figsize=(15, 5))
-fig.patch.set_alpha(0.2)
-for i in log_rets.keys():
-    if i == "AAPL":
-        ax.plot((1 + log_rets[i]).cumprod(), color="red")
+# fig, ax = plt.subplots(figsize=(15, 5), alpha=0.2)
+# # fig.patch.set_alpha(0.2)
+# for ticker in log_rets.keys():
+#     (color, alpha) = ("red", 0.8) if ticker == "AAPL" else ("grey", 0.3)
+#     ax.plot((1 + log_rets[ticker]).cumprod(), color=color, alpha=alpha)
+#
+# ax.legend(tickers)
+# ax.set_title("AAPL returns over time compared to other tech stocks")
+# # ax.text(18970, 4, ann_rets["AAPL"], size=9, color='red')
 
-    else:
-        ax.plot((1 + log_rets[i]).cumprod(), color="grey", alpha=0.3)
+# fig.patch.set_alpha(0.2)
+plt.figure(figsize=(15, 5))
+for ticker in log_rets.keys():
+    (color, alpha) = ("red", 0.8) if ticker == "AAPL" else ("grey", 0.3)
+    plt.plot(
+        (1 + log_rets[ticker]).cumprod(),
+        color=color,
+        alpha=alpha,
+    )
 
-ax.legend(tickers)
-ax.set_title("AAPL returns over time compared to other tech stocks")
+plt.legend(tickers)
+plt.title("AAPL returns over time compared to other tech stocks")
 # ax.text(18970, 4, ann_rets["AAPL"], size=9, color='red')
 
 plt.show()
@@ -101,8 +156,16 @@ validation_set_reg = np.array(validation_split_reg)
 
 
 X_train_reg, y_train_reg, X_val_reg, y_val_reg = windowing(
-    train_set_reg, validation_set_reg, WINDOW, PREDICTION_SCOPE
+    train_set_reg, validation_set_reg, WINDOW=2, PREDICTION_SCOPE=0
 )
+
+train_set_reg
+len(train_set_reg)
+train_set_reg[0:2, :-1] 
+
+a = np.array([[1, 2], [3, 4], [5, 6], [7, 8]])
+a[0:2, -1]
+a[3, -1]
 
 
 # Reshaping the Data
@@ -114,26 +177,21 @@ y_train_reg = np.array(y_train_reg)
 X_val_reg = np.array(X_val_reg)
 y_val_reg = np.array(y_val_reg)
 
+X_train_reg.shape
+X_val_reg.shape
 
 X_train_reg = X_train_reg.reshape(X_train_reg.shape[0], -1)
 X_val_reg = X_val_reg.reshape(X_val_reg.shape[0], -1)
 
+X_train_reg.shape
+X_val_reg.shape
 
-print(y_train_reg.shape)
-print(X_train_reg.shape)
-print(X_val_reg.shape)
-print(y_val_reg.shape)
 
 
 X_test_reg = np.array(test_reg.iloc[:, :-1])
 y_test_reg = np.array(test_reg.iloc[:, -1])
 
-print(X_test_reg.shape)
-
-
 X_test_reg = X_test_reg.reshape(1, -1)
-
-print(X_test_reg.shape)
 
 
 # ### Linear Regression
@@ -223,6 +281,10 @@ PREDICTION_SCOPE = 0
 
 stock_prices = feature_engineering(stock_prices, SPY)
 
+stock_prices["Adj Close"].rolling(1).quantile(1)
+
+stock_prices.iloc[-2:]
+
 
 train, test = train_test_split(stock_prices, WINDOW)
 train_set, validation_set = train_validation_split(train, PERCENTAGE)
@@ -260,7 +322,7 @@ print(f"X_train shape: {X_train.shape}")
 print(f"X_val shape: {X_val.shape}")
 
 
-mae, xgb_model = xgb_model(X_train, y_train, X_val, y_val, plotting=True)
+mae, xgb_model = xgb_model_fun(X_train, y_train, X_val, y_val, plotting=True)
 
 
 plt.figure(figsize=(16, 16))
@@ -305,7 +367,7 @@ plt.show()
 # X_val = X_val.reshape(X_val.shape[0], -1)
 
 
-# new_mae, new_xgb_model = xgb_model(X_train, y_train, X_val, y_val, plotting=True)
+# new_mae, new_xgb_model = xgb_model_fun(X_train, y_train, X_val, y_val, plotting=True)
 
 # print(new_mae)
 
@@ -498,7 +560,7 @@ print(X_val_lstm.shape)
 print(X_test_lstm.shape)
 
 
-model_lstm = lstm_model(
+model_lstm = lstm_model_fun(
     X_train_lstm,
     y_train_lstm,
     X_val_lstm,
