@@ -10,6 +10,7 @@ from src.model.analysis import (
     download_price_dict,
     get_series_dict,
     get_shifted_log_dict,
+    plot_box_and_hist,
 )
 
 
@@ -145,3 +146,11 @@ class TestBuildData:
         assert (
             tm.assert_series_equal(log_dict["DEMO"], expected_series) is None
         )
+
+    def test_plot(self):
+        tickers = ("AAPL", "MSFT", "TSLA", "AMZN", "SPY",)
+        stocks_price_dict = download_price_dict(
+            tickers=tickers, start="2001-11-30", end="2022-08-19"
+        )
+        stocks_close_price_dict = get_series_dict(stocks_price_dict, "Close")
+        plot_box_and_hist(target="AAPL", series_dict=stocks_close_price_dict)
