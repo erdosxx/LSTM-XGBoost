@@ -147,10 +147,6 @@ train_split_reg, validation_split_reg = train_validation_split(
 )
 
 
-print(train_reg.shape)
-print(test_reg.shape)
-
-
 train_set_reg = np.array(train_split_reg)
 validation_set_reg = np.array(validation_split_reg)
 

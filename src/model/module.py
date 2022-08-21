@@ -35,7 +35,7 @@ def feature_engineering(
     #     data["Predictions"] = predictions
     #     data["Close"] = data["Close_y"]
     #     data.drop("Close_y", 1, inplace=True)
-    #     data.dropna(0, inplace=True)
+    #     data.dropna(axis=0, inplace=True)
     # else:
     #     pass
 
@@ -49,7 +49,7 @@ def features(data: DataFrame, SPY: Series) -> DataFrame:
         data[f"Adj_Close{i}"] = data["Adj Close"].rolling(i).mean()
         data[f"Volume{i}"] = data["Volume"].rolling(i).mean()
 
-        # Rolling Standart Deviation
+        # Rolling Standard Deviation
         data[f"Low_std{i}"] = data["Low"].rolling(i).std()
         data[f"High_std{i}"] = data["High"].rolling(i).std()
         data[f"Adj_CLose{i}"] = data["Adj Close"].rolling(i).std()
@@ -61,8 +61,8 @@ def features(data: DataFrame, SPY: Series) -> DataFrame:
         data[f"Adj_Close{i}"] = data["Adj Close"].rolling(i).max()
         data[f"Adj_Close{i}"] = data["Adj Close"].rolling(i).min()
 
-        # Rolling Quantile
-        data[f"Adj_Close{i}"] = data["Adj Close"].rolling(i).quantile(1)
+        # Rolling Quantile: same as max when quantile = 1
+        data[f"Adj_Close{i}"] = data["Adj Close"].rolling(i).quantile(1)  
 
     data["SPY"] = SPY
     # Decoding the time of the year
@@ -82,7 +82,7 @@ def features(data: DataFrame, SPY: Series) -> DataFrame:
     # data.drop(labels="Close", axis=1, inplace=True)  # Rename?
     data.drop("Close", 1, inplace=True)  # Rename?
     #data.dropna(axis=0, inplace=True)
-    data.dropna(0, inplace=True)
+    data.dropna(axis=0, inplace=True)
     return data
 
 
