@@ -192,26 +192,27 @@ def plot_concat_data(
     plot_values = np.concatenate([y_val, y_test, pred_test])
     num_plot_values = len(plot_values)
 
-    plt.plot(y_val, marker=".")
-
-    y_test_start_idx = len(y_val) - 1
-    y_test_last_idx = y_test_start_idx + len(y_test)
-    plot_y_test_values = np.insert(arr=y_test, obj=0, values=y_val[-1])
-    plt.plot(
-        list(range(y_test_start_idx, y_test_last_idx + 1)),
-        plot_y_test_values,
-        marker=".",
-        color="orange",
+    plot_list(
+        data=y_val,
+        color="blue",
+        start_idx=0,
+        start_val=None,
     )
 
-    pred_test_start_idx = y_test_last_idx
-    pred_test_last_idx = pred_test_start_idx + len(pred_test)
-    plot_pred_values = np.insert(arr=pred_test, obj=0, values=y_test[-1])
-    plt.plot(
-        list(range(pred_test_start_idx, pred_test_last_idx + 1)),
-        plot_pred_values,
-        marker=".",
+    y_test_start_idx = len(y_val) - 1
+    plot_list(
+        data=y_test,
+        color="orange",
+        start_idx=y_test_start_idx,
+        start_val=y_val[-1],
+    )
+
+    pred_test_start_idx = y_test_start_idx + len(y_test)
+    plot_list(
+        data=pred_test,
         color="red",
+        start_idx=pred_test_start_idx,
+        start_val=y_test[-1],
     )
 
     upper_band = plot_values + mae
@@ -227,12 +228,13 @@ def plot_concat_data(
         alpha=0.1,
     )
 
-    pred_value = round(plot_pred_values[-1], 2)
+    pred_value = round(pred_test[-1], 2)
     x_pos_delta = -0.5
     y_pos_delta = 2
+    pred_test_last_idx = pred_test_start_idx + len(pred_test)
     plt.text(
         x=pred_test_last_idx + x_pos_delta,
-        y=plot_pred_values[-1] + y_pos_delta,
+        y=pred_test[-1] + y_pos_delta,
         s=str(pred_value) + "$",
         size=11,
         color="red",
@@ -257,3 +259,24 @@ def plot_concat_data(
         ["Validation", "Testing Set (input for Prediction)", "Prediction"]
     )
     plt.show()
+
+
+def plot_list(
+    data: np.ndarray,
+    color: str,
+    start_idx: int,
+    start_val: np.float64 = None,
+) -> None:
+    plot_values = data
+    last_idx = len(data) - 1
+
+    if start_idx:
+        plot_values = np.insert(arr=data, obj=0, values=start_val)
+        last_idx = start_idx + len(data)
+
+    plt.plot(
+        list(range(start_idx, last_idx + 1)),
+        plot_values,
+        marker=".",
+        color=color,
+    )

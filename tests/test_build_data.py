@@ -475,6 +475,7 @@ class TestBuildData:
             prediction_scope=0,
         )
 
+
     @pytest.mark.skip("Need to implement for testing")
     def test_plot(self):
         tickers = (
