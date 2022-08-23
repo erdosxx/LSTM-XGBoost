@@ -140,47 +140,50 @@ PREDICTION_SCOPE = 0
 
 stock_prices = feature_engineering(stock_prices, SPY)
 
-
+# stock_prices -> train_reg(:-WINDOW) + test_reg(-WINDOW:) <--- 2
 train_reg, test_reg = train_test_split(stock_prices, WINDOW)
+# train_reg -> train_split_reg(99.5%) + validation_split_reg(0.5%)
+# dataframe -> np.narray
 train_split_reg, validation_split_reg = train_validation_split(
     train_reg, PERCENTAGE
 )
 
 
+# Useless expression
 train_set_reg = np.array(train_split_reg)
 validation_set_reg = np.array(validation_split_reg)
 
-
+# train_set_reg -> X_train_reg + y_train_reg
+# validation_set_reg -> X_val_reg + y_val_reg
 X_train_reg, y_train_reg, X_val_reg, y_val_reg = windowing(
     train_set_reg, validation_set_reg, WINDOW=2, PREDICTION_SCOPE=0
 )
 
-train_set_reg
-len(train_set_reg)
-train_set_reg[0:2, :-1] 
-
-a = np.array([[1, 2], [3, 4], [5, 6], [7, 8]])
-a[0:2, -1]
-a[3, -1]
+# train_set_reg
+# len(train_set_reg)
+# train_set_reg[0:2, :-1] 
+# 
+# a = np.array([[1, 2], [3, 4], [5, 6], [7, 8]])
+# a[0:2, -1]
+# a[3, -1]
 
 
 # Reshaping the Data
 
+# Useless expression
 X_train_reg = np.array(X_train_reg)
 y_train_reg = np.array(y_train_reg)
-
-
 X_val_reg = np.array(X_val_reg)
 y_val_reg = np.array(y_val_reg)
 
-X_train_reg.shape
-X_val_reg.shape
+# X_train_reg.shape
+# X_val_reg.shape
 
 X_train_reg = X_train_reg.reshape(X_train_reg.shape[0], -1)
 X_val_reg = X_val_reg.reshape(X_val_reg.shape[0], -1)
 
-X_train_reg.shape
-X_val_reg.shape
+# X_train_reg.shape
+# X_val_reg.shape
 
 
 
@@ -218,6 +221,7 @@ print("MSE: {}".format(np.mean((y_hat_rf - y_val_reg) ** 2)))
 print("MAE: {}".format(mae_rf))
 
 
+# Useless codes
 y_hat_rf = np.ravel(y_hat_rf)
 y_hat_lr = np.ravel(y_hat_lr)
 y_val_reg = np.ravel(y_val_reg)

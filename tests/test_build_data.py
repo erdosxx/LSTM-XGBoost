@@ -1,10 +1,15 @@
 import pytest
 import datetime as dt
+import matplotlib.pyplot as plt
 import numpy as np
+from numpy.testing import assert_array_equal
 import pandas as pd
 from pandas import testing as tm
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error
 import yfinance as yf
 from src.model.analysis import (
     get_shifted_log_rets,
@@ -15,6 +20,11 @@ from src.model.analysis import (
     plot_series,
     get_cumprod_dict,
     add_features,
+    train_test_split,
+    train_validation_split,
+    windowing,
+    put_column_to_last,
+    plot_concat_data,
 )
 
 
@@ -213,8 +223,8 @@ class TestBuildData:
         apple_price_feat = add_features(apple_price)
 
         assert len(apple_price_feat.columns) == 6 + 9 * 6 + 7
-        assert "Close" not in apple_price_feat.columns
-        assert "Close_y" in apple_price_feat.columns
+        assert "Close" in apple_price_feat.columns
+        assert "Close_y" not in apple_price_feat.columns
 
     def test_rolling_window_calc_should_return_expected(self):
         df = pd.DataFrame({"Data": [0, 1, 2, 3, 4, np.nan]})
@@ -253,6 +263,217 @@ class TestBuildData:
             index=pd.date_range("2000", freq="D", periods=3),
         )
         tm.assert_frame_equal(df, df_expected) is None
+
+    def test_train_test_split_should_return_expected(self):
+        pd_series = pd.Series(
+            {
+                "2001-12-01": 1,
+                "2001-12-02": 2,
+                "2001-12-03": 3,
+                "2001-12-04": 4,
+                "2001-12-05": 5,
+            }
+        )
+        df = pd_series.to_frame()
+        train_test_dict = train_test_split(df, window=2)
+        train = train_test_dict["train"]
+        train_expected = pd.Series(
+            {
+                "2001-12-01": 1,
+                "2001-12-02": 2,
+                "2001-12-03": 3,
+            }
+        ).to_frame()
+        assert tm.assert_frame_equal(train, train_expected) is None
+        test = train_test_dict["test"]
+        test_expected = pd.Series(
+            {
+                "2001-12-04": 4,
+                "2001-12-05": 5,
+            }
+        ).to_frame()
+        assert tm.assert_frame_equal(test, test_expected) is None
+
+    def test_train_validation_split_should_return_expected(self):
+        pd_series = pd.Series(
+            {
+                "2001-12-01": 1,
+                "2001-12-02": 2,
+                "2001-12-03": 3,
+                "2001-12-04": 4,
+                "2001-12-05": 5,
+            }
+        )
+        df = pd_series.to_frame()
+        train_val_dict = train_validation_split(df, percentage=0.995)
+
+        train = train_val_dict["train"]
+        train_expected = np.array([[1], [2], [3], [4]])
+        assert assert_array_equal(train, train_expected) is None
+
+        val = train_val_dict["validation"]
+        val_expected = np.array([[5]])
+        assert assert_array_equal(val, val_expected) is None
+
+    def test_windowing_should_return_expected(self):
+        data = np.array(
+            [
+                [11, 12, 13],
+                [21, 22, 23],
+                [31, 32, 33],
+                [41, 42, 43],
+                [51, 52, 53],
+            ]
+        )
+        input_target_dict = windowing(data, window=2, prediction_scope=0)
+        input_data = input_target_dict["input"]
+        input_data_expected = np.array(
+            [[[11, 12], [21, 22]], [[21, 22], [31, 32]], [[31, 32], [41, 42]]]
+        )
+        assert assert_array_equal(input_data, input_data_expected) is None
+
+        target_data = input_target_dict["target"]
+        target_data_expected = np.array([33, 43, 53])
+        assert assert_array_equal(target_data, target_data_expected) is None
+
+        input_target_dict = windowing(data, window=2, prediction_scope=1)
+        input_data = input_target_dict["input"]
+        input_data_expected = np.array(
+            [[[11, 12], [21, 22]], [[21, 22], [31, 32]]]
+        )
+        assert assert_array_equal(input_data, input_data_expected) is None
+
+        target_data = input_target_dict["target"]
+        target_data_expected = np.array([43, 53])
+        assert assert_array_equal(target_data, target_data_expected) is None
+
+    def test_make_1d_array_should_return_expected(self):
+        input_data_expected = np.array(
+            [[[11, 12], [21, 22]], [[21, 22], [31, 32]], [[31, 32], [41, 42]]]
+        )
+        input_1d = input_data_expected.reshape(
+            input_data_expected.shape[0], -1
+        )
+        input_1d_expected = np.array(
+            [[11, 12, 21, 22], [21, 22, 31, 32], [31, 32, 41, 42]]
+        )
+        assert assert_array_equal(input_1d, input_1d_expected) is None
+
+        input_data_expected = np.array(
+            [[[11, 12], [21, 22]], [[21, 22], [31, 32]]]
+        )
+        input_1d = input_data_expected.reshape(
+            input_data_expected.shape[0], -1
+        )
+        input_1d_expected = np.array([[11, 12, 21, 22], [21, 22, 31, 32]])
+        assert assert_array_equal(input_1d, input_1d_expected) is None
+
+    def test_reorder_colum_to_last_should_return_expected(self):
+        df = pd.DataFrame(
+            np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]]),
+            columns=["a", "b", "c"],
+        )
+        df_reordered = put_column_to_last(df, "a")
+        assert df_reordered.iloc[:, -1].name == "a"
+        assert df.iloc[:, -1].name == "c"
+
+    def test_regression_fitting_should_return_expected(self):
+        apple_price_dict = download_price_dict(
+            tickers=("AAPL",), start="2001-11-30", end="2022-08-19"
+        )
+        apple_price = apple_price_dict["AAPL"]
+        apple_price_feat = add_features(apple_price)
+
+        spy_price_dict = download_price_dict(
+            tickers=("SPY",), start="2001-11-30", end="2022-08-19"
+        )
+
+        spy_close_price_dict = get_series_dict(spy_price_dict, "Close")
+        spy_close_price = spy_close_price_dict["SPY"]
+
+        apple_price_feat["SPY"] = spy_close_price
+        apple_price_feat.rename(columns={"Close": "Close_y"}, inplace=True)
+        apple_price_feat_reordered = put_column_to_last(
+            apple_price_feat, "Close_y"
+        )
+
+        train_test_dict = train_test_split(
+            apple_price_feat_reordered, window=2
+        )
+        train_reg = train_test_dict["train"]
+        test_reg = train_test_dict["test"]
+
+        train_val_dict = train_validation_split(train_reg, percentage=0.995)
+        train_set_reg = train_val_dict["train"]
+        validation_set_reg = train_val_dict["validation"]
+
+        input_target_train_dict = windowing(
+            train_set_reg, window=2, prediction_scope=0
+        )
+        x_train_reg = input_target_train_dict["input"]
+        y_train_reg = input_target_train_dict["target"]
+        input_target_val_dict = windowing(
+            validation_set_reg, window=2, prediction_scope=0
+        )
+        x_val_reg = input_target_val_dict["input"]
+        y_val_reg = input_target_val_dict["target"]
+
+        x_train_reg_1d = x_train_reg.reshape(x_train_reg.shape[0], -1)
+        x_val_reg_1d = x_val_reg.reshape(x_val_reg.shape[0], -1)
+
+        x_test_reg_1d = np.array(test_reg.iloc[:, :-1])
+        y_test_reg_1d = np.array(test_reg.iloc[:, -1])
+
+        x_test_reg_1d_rs = x_test_reg_1d.reshape(1, -1)
+
+        lr = LinearRegression()
+        lr.fit(x_train_reg_1d, y_train_reg)
+
+        y_hat_lr = lr.predict(x_val_reg_1d)
+
+        mae_lr = mean_absolute_error(y_val_reg, y_hat_lr)
+        mse_lr = np.mean((y_hat_lr - y_val_reg) ** 2)
+
+        print(f"Linear Regression MSE: {mse_lr}")
+        print(f"Linear Regression MAE: {mae_lr}")
+
+        rf = RandomForestRegressor()
+        rf.fit(x_train_reg_1d, y_train_reg)
+
+        y_hat_rf = rf.predict(x_val_reg_1d)
+        mae_rf = mean_absolute_error(y_val_reg, y_hat_rf)
+        mse_rf = np.mean((y_hat_rf - y_val_reg) ** 2)
+
+        print(f"Random Forest MSE: {mse_rf}")
+        print(f"Random Forest MAE: {mae_rf}")
+
+        # y_hat_lr
+        # np.ravel(y_hat_lr)
+        # y_hat_rf
+        # np.ravel(y_hat_rf)
+        # y_val_reg np.ravel(y_val_reg)
+
+        assert assert_array_equal(y_hat_lr, np.ravel(y_hat_lr)) is None
+        assert assert_array_equal(y_hat_rf, np.ravel(y_hat_rf)) is None
+        assert assert_array_equal(y_val_reg, np.ravel(y_val_reg)) is None
+
+        fig, ax = plt.subplots(figsize=(15, 8))
+        ax.plot(y_val_reg, color="red")
+        ax.plot(y_hat_lr, color="orange")
+        ax.plot(y_hat_rf, color="grey", alpha=0.2)
+        ax.legend(["True Returns", "Linear Regression", "Random Forest"])
+
+        pred_test_lr = lr.predict(x_test_reg_1d_rs)
+
+        plot_concat_data(
+            y_val=y_val_reg,
+            y_test=y_test_reg_1d,
+            pred_test=pred_test_lr,
+            df_for_x=apple_price_feat_reordered,
+            mae=mae_lr,
+            window=2,
+            prediction_scope=0,
+        )
 
     @pytest.mark.skip("Need to implement for testing")
     def test_plot(self):

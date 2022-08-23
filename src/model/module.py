@@ -62,7 +62,7 @@ def features(data: DataFrame, SPY: Series) -> DataFrame:
         data[f"Adj_Close{i}"] = data["Adj Close"].rolling(i).min()
 
         # Rolling Quantile: same as max when quantile = 1
-        data[f"Adj_Close{i}"] = data["Adj Close"].rolling(i).quantile(1)  
+        data[f"Adj_Close{i}"] = data["Adj Close"].rolling(i).quantile(1)
 
     data["SPY"] = SPY
     # Decoding the time of the year
@@ -81,7 +81,7 @@ def features(data: DataFrame, SPY: Series) -> DataFrame:
     data["Close_y"] = data["Close"]
     # data.drop(labels="Close", axis=1, inplace=True)  # Rename?
     data.drop("Close", 1, inplace=True)  # Rename?
-    #data.dropna(axis=0, inplace=True)
+    # data.dropna(axis=0, inplace=True)
     data.dropna(axis=0, inplace=True)
     return data
 
@@ -114,16 +114,14 @@ def windowing(
     y_test = []
 
     for i in range(len(train) - (WINDOW + PREDICTION_SCOPE)):
-        X, y = np.array(train[i : i + WINDOW, :-1]), np.array(
-            train[i + WINDOW + PREDICTION_SCOPE, -1]
-        )
+        X = np.array(train[i : i + WINDOW, :-1])
+        y = np.array(train[i + WINDOW + PREDICTION_SCOPE, -1])
         X_train.append(X)
         y_train.append(y)
 
     for i in range(len(val) - (WINDOW + PREDICTION_SCOPE)):
-        X, y = np.array(val[i : i + WINDOW, :-1]), np.array(
-            val[i + WINDOW + PREDICTION_SCOPE, -1]
-        )
+        X = np.array(val[i : i + WINDOW, :-1])
+        y = np.array(val[i + WINDOW + PREDICTION_SCOPE, -1])
         X_test.append(X)
         y_test.append(y)
 
@@ -151,20 +149,27 @@ def train_test_split(data: DataFrame, WINDOW: int) -> list[DataFrame]:
     return [train, test]
 
 
-def train_validation_split(train: DataFrame, percentage: float) -> list[np.array]:
+def train_validation_split(
+    train: DataFrame, percentage: float
+) -> list[np.ndarray]:
     """
     Divides the training set into train and validation set depending
     on the percentage indicated
     """
     threshold = int(len(train) * percentage)
-    train_set = np.array(train.iloc[: threshold])
-    validation_set = np.array(train.iloc[threshold :])
+    train_set = np.array(train.iloc[:threshold])
+    validation_set = np.array(train.iloc[threshold:])
 
     return [train_set, validation_set]
 
 
 def plotting(
-    y_val, y_test, pred_test, mae, WINDOW: int, PREDICTION_SCOPE: int
+    y_val: np.ndarray,
+    y_test: np.ndarray,
+    pred_test: np.ndarray,
+    mae: np.float64,
+    WINDOW: int,
+    PREDICTION_SCOPE: int,
 ):
     """
     This function returns a graph where:

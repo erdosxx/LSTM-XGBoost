@@ -1,3 +1,4 @@
+from datetime import timedelta
 from pandas.core.series import Series
 from pandas.core.frame import DataFrame
 import matplotlib.pyplot as plt
@@ -102,10 +103,18 @@ def plot_hist(
 def add_features(df: DataFrame) -> DataFrame:
     df_out = df.copy(deep=True)
     for n_roll in range(2, 8):
-        df_out[f"Adj_Close_RM{n_roll}"] = df["Adj Close"].rolling(n_roll).mean()
-        df_out[f"Adj_Close_RSTD{n_roll}"] = df["Adj Close"].rolling(n_roll).std()
-        df_out[f"Adj_Close_RMAX{n_roll}"] = df["Adj Close"].rolling(n_roll).max()
-        df_out[f"Adj_Close_RMIN{n_roll}"] = df["Adj Close"].rolling(n_roll).min()
+        df_out[f"Adj_Close_RM{n_roll}"] = (
+            df["Adj Close"].rolling(n_roll).mean()
+        )
+        df_out[f"Adj_Close_RSTD{n_roll}"] = (
+            df["Adj Close"].rolling(n_roll).std()
+        )
+        df_out[f"Adj_Close_RMAX{n_roll}"] = (
+            df["Adj Close"].rolling(n_roll).max()
+        )
+        df_out[f"Adj_Close_RMIN{n_roll}"] = (
+            df["Adj Close"].rolling(n_roll).min()
+        )
         df_out[f"Adj_Close_RQ{n_roll}"] = (
             df["Adj Close"].rolling(n_roll).quantile(1)
         )
@@ -128,7 +137,123 @@ def add_features(df: DataFrame) -> DataFrame:
     df_out["Upper_Shape"] = df["High"] - np.maximum(df["Open"], df["Close"])
     df_out["Lower_Shape"] = np.minimum(df["Open"], df["Close"]) - df["Low"]
 
-    df_out.rename(columns={"Close": "Close_y"}, inplace=True)
     df_out.dropna(axis=0, inplace=True)
 
     return df_out
+
+
+def put_column_to_last(df: DataFrame, col: str) -> DataFrame:
+    col_list = list(df.columns)
+    col_list.remove(col)
+    col_list.append(col)
+
+    return df[col_list]
+
+
+def train_test_split(df: DataFrame, window: int) -> dict[str, DataFrame]:
+    return {"train": df.iloc[:-window], "test": df.iloc[-window:]}
+
+
+def train_validation_split(
+    df: DataFrame, percentage: float
+) -> dict[str, np.ndarray]:
+    threshold = int(len(df) * percentage)
+
+    return {
+        "train": np.array(df.iloc[:threshold]),
+        "validation": np.array(df.iloc[threshold:]),
+    }
+
+
+def windowing(
+    data: np.ndarray, window: int, prediction_scope: int
+) -> dict[str, np.ndarray]:
+    input_data, target_data = [], []
+
+    for i in range(len(data) - (window + prediction_scope)):
+        input_data.append(np.array(data[i : i + window, :-1]))
+        target_data.append(np.array(data[i + window + prediction_scope, -1]))
+
+    return {"input": np.array(input_data), "target": np.array(target_data)}
+
+
+def plot_concat_data(
+    y_val: np.ndarray,
+    y_test: np.ndarray,
+    pred_test: np.ndarray,
+    df_for_x: DataFrame,
+    mae: np.float64,
+    window: int,
+    prediction_scope: int,
+):
+    "plot comcatenated data: y-val + y-test + pred_test"
+    plt.figure(figsize=(16, 8))
+
+    plot_values = np.concatenate([y_val, y_test, pred_test])
+    num_plot_values = len(plot_values)
+
+    plt.plot(y_val, marker=".")
+
+    y_test_start_idx = len(y_val) - 1
+    y_test_last_idx = y_test_start_idx + len(y_test)
+    plot_y_test_values = np.insert(arr=y_test, obj=0, values=y_val[-1])
+    plt.plot(
+        list(range(y_test_start_idx, y_test_last_idx + 1)),
+        plot_y_test_values,
+        marker=".",
+        color="orange",
+    )
+
+    pred_test_start_idx = y_test_last_idx
+    pred_test_last_idx = pred_test_start_idx + len(pred_test)
+    plot_pred_values = np.insert(arr=pred_test, obj=0, values=y_test[-1])
+    plt.plot(
+        list(range(pred_test_start_idx, pred_test_last_idx + 1)),
+        plot_pred_values,
+        marker=".",
+        color="red",
+    )
+
+    upper_band = plot_values + mae
+    lower_band = plot_values - mae
+    plt.plot(upper_band, color="grey", alpha=0.3)
+    plt.plot(lower_band, color="grey", alpha=0.3)
+
+    plt.fill_between(
+        x=list(range(0, num_plot_values)),
+        y1=upper_band,
+        y2=lower_band,
+        color="grey",
+        alpha=0.1,
+    )
+
+    pred_value = round(plot_pred_values[-1], 2)
+    x_pos_delta = -0.5
+    y_pos_delta = 2
+    plt.text(
+        x=pred_test_last_idx + x_pos_delta,
+        y=plot_pred_values[-1] + y_pos_delta,
+        s=str(pred_value) + "$",
+        size=11,
+        color="red",
+    )
+
+    dates_str = df_for_x.index[-(num_plot_values - 1) :].strftime("%y-%b-%d")
+    predict_date = df_for_x.index[-1] + timedelta(prediction_scope + 1)
+    predict_date_str = predict_date.strftime("%y-%b-%d")
+    x_ticks = list(dates_str) + [predict_date_str]
+
+    plt.xticks(
+        ticks=list(range(0, num_plot_values)), labels=x_ticks, rotation=60
+    )
+    plt.title(
+        f"Target date: {predict_date_str}, Predict value: {pred_value}, "
+        f"MAE = {round(mae,2)}\n"
+        f"To predict {prediction_scope + 1} days after, "
+        f"used last {window} days data.",
+        size=15,
+    )
+    plt.legend(
+        ["Validation", "Testing Set (input for Prediction)", "Prediction"]
+    )
+    plt.show()
