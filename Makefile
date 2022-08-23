@@ -28,6 +28,10 @@ qtconsole:
 jupyter:
 	jupyter notebook --kernel=lstm-xgboost &
 
+.PHONY: test
+test:
+	pytest -n auto -vv -s tests
+
 .PHONY: clean
 clean:
 	find . -type f -name "*.pyc" | xargs rm -rf

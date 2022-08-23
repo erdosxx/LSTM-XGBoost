@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.stats as st
 import yfinance as yf
+from typing import Union
 
 
 def get_shifted_log_rets(series: Series, shift_val: int = 1) -> Series:
@@ -280,3 +281,80 @@ def plot_list(
         marker=".",
         color=color,
     )
+
+
+# target: "AAPL"
+# ref: "SPY"
+# start_date: "2001-11-30"
+# end_date: "2022-08-19"
+# target_col: "Close"
+def data_prep_for_fitting(
+    target_tic: str,
+    target_col: str,
+    ref_tic: str,
+    start_date: str,
+    end_date: str,
+    window: int,
+    percentage: float,
+    prediction_scope: int,
+) -> Union[dict[str, np.ndarray], dict[str, DataFrame]]:
+    target_price_dict = download_price_dict(
+        tickers=(target_tic,), start=start_date, end=end_date
+    )
+    target_price = target_price_dict[target_tic]
+    target_price_feat = add_features(target_price)
+
+    ref_price_dict = download_price_dict(
+        tickers=(ref_tic,), start=start_date, end=end_date
+    )
+
+    ref_column_price_dict = get_series_dict(ref_price_dict, target_col)
+    ref_close_price = ref_column_price_dict[ref_tic]
+
+    target_price_feat[ref_tic] = ref_close_price
+    target_col_new_name = target_col + "_y"
+    target_price_feat.rename(
+        columns={target_col: target_col_new_name}, inplace=True
+    )
+    target_price_feat_reordered = put_column_to_last(
+        target_price_feat, target_col_new_name
+    )
+
+    train_test_dict = train_test_split(
+        target_price_feat_reordered, window=window
+    )
+    train_reg = train_test_dict["train"]
+    test_reg = train_test_dict["test"]
+
+    train_val_dict = train_validation_split(train_reg, percentage=percentage)
+    train_set_reg = train_val_dict["train"]
+    validation_set_reg = train_val_dict["validation"]
+
+    input_target_train_dict = windowing(
+        train_set_reg, window=window, prediction_scope=prediction_scope
+    )
+    x_train_reg = input_target_train_dict["input"]
+    y_train_reg = input_target_train_dict["target"]
+    input_target_val_dict = windowing(
+        validation_set_reg, window=window, prediction_scope=prediction_scope
+    )
+    x_val_reg = input_target_val_dict["input"]
+    y_val_reg = input_target_val_dict["target"]
+
+    x_train_reg_1d = x_train_reg.reshape(x_train_reg.shape[0], -1)
+    x_val_reg_1d = x_val_reg.reshape(x_val_reg.shape[0], -1)
+
+    x_test_reg_1d = np.array(test_reg.iloc[:, :-1])
+    y_test_reg_1d = np.array(test_reg.iloc[:, -1])
+
+    x_test_reg_1d_rs = x_test_reg_1d.reshape(1, -1)
+
+    return {
+        "features": target_price_feat_reordered,
+        "x_train": x_train_reg_1d,
+        "y_train": y_train_reg,
+        "x_val": x_val_reg_1d,
+        "y_val": y_val_reg,
+        "x_test": x_test_reg_1d_rs,
+        "y_test": y_test_reg_1d,
+    }
