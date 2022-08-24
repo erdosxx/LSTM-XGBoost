@@ -20,6 +20,7 @@ def download_price_dict(
         output[tic] = yf.download(
             tickers=tic, start=start, end=end, progress=False
         )
+        print(f"Data for {tic} was downloaded with size, {len(output[tic])}")
 
     return output
 
@@ -151,8 +152,8 @@ def put_column_to_last(df: DataFrame, col: str) -> DataFrame:
     return df[col_list]
 
 
-def train_test_split(df: DataFrame, window: int) -> dict[str, DataFrame]:
-    return {"train": df.iloc[:-window], "test": df.iloc[-window:]}
+def train_test_split(df: DataFrame, threshold: int) -> dict[str, DataFrame]:
+    return {"train": df.iloc[:-threshold], "test": df.iloc[-threshold:]}
 
 
 def train_validation_split(
@@ -169,6 +170,36 @@ def train_validation_split(
 def windowing(
     data: np.ndarray, window: int, prediction_scope: int
 ) -> dict[str, np.ndarray]:
+    """
+    Input:
+        data:
+            [
+                [11, 12, 13],
+                [21, 22, 23],
+                [31, 32, 33],
+                [41, 42, 43],
+                [51, 52, 53],
+            ]
+        window: 2
+        prediction_scope: 1
+    Output:
+        "input":
+            [
+                [
+                    [11, 12],
+                    [21, 22]
+                ],
+                [
+                    [21, 22],
+                    [31, 32]
+                ]
+            ]
+        "target":
+            [43, 53]
+
+    The len(Input) and len(Output) should be same.
+    len(Input) == len(Output) == len(data) - window - prediction_scope
+    """
     input_data, target_data = [], []
 
     for i in range(len(data) - (window + prediction_scope)):
@@ -298,20 +329,29 @@ def data_prep_for_fitting(
     percentage: float,
     prediction_scope: int,
 ) -> Union[dict[str, np.ndarray], dict[str, DataFrame]]:
-    target_price_dict = download_price_dict(
-        tickers=(target_tic,), start=start_date, end=end_date
-    )
-    target_price = target_price_dict[target_tic]
+    try:
+        price_dict = download_price_dict(
+            tickers=(target_tic, ref_tic), start=start_date, end=end_date
+        )
+        target_price = price_dict[target_tic]
+        data_size = len(target_price)
+        train_size = data_size - window
+        val_size = train_size - int(train_size * percentage)
+        val_window_size = val_size - window - prediction_scope
+        assert val_window_size > 0
+    except AssertionError as ae:
+        print(
+            f"Not enough data size, {data_size} for "
+            f"validation window data, ({val_window_size} <= 0) "
+            f"for window {window} and percentage {percentage}, "
+            f"prediction scope {prediction_scope}"
+        )
+        raise ae
+
     target_price_feat = add_features(target_price)
 
-    ref_price_dict = download_price_dict(
-        tickers=(ref_tic,), start=start_date, end=end_date
-    )
+    target_price_feat[ref_tic] = price_dict[ref_tic][target_col]
 
-    ref_column_price_dict = get_series_dict(ref_price_dict, target_col)
-    ref_close_price = ref_column_price_dict[ref_tic]
-
-    target_price_feat[ref_tic] = ref_close_price
     target_col_new_name = target_col + "_y"
     target_price_feat.rename(
         columns={target_col: target_col_new_name}, inplace=True
@@ -321,7 +361,7 @@ def data_prep_for_fitting(
     )
 
     train_test_dict = train_test_split(
-        target_price_feat_reordered, window=window
+        target_price_feat_reordered, threshold=window
     )
     train_reg = train_test_dict["train"]
     test_reg = train_test_dict["test"]
@@ -329,6 +369,14 @@ def data_prep_for_fitting(
     train_val_dict = train_validation_split(train_reg, percentage=percentage)
     train_set_reg = train_val_dict["train"]
     validation_set_reg = train_val_dict["validation"]
+
+    # train_reg_size = len(price_dict[target_tic]) - window
+    # val_set_size = train_reg_size - int(train_reg_size * percentage)
+    # val_set_size = len(train_reg) - int(len(train_reg) * percentage)
+    # val_size = len(validation_set_reg) - window - prediction_scope
+    # val_size = val_set_size - window - prediction_scope
+    # print("val size", val_size)
+    # assert val_size > 0
 
     input_target_train_dict = windowing(
         train_set_reg, window=window, prediction_scope=prediction_scope

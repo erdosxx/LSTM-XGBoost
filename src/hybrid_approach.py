@@ -161,8 +161,8 @@ X_train_reg, y_train_reg, X_val_reg, y_val_reg = windowing(
 
 # train_set_reg
 # len(train_set_reg)
-# train_set_reg[0:2, :-1] 
-# 
+# train_set_reg[0:2, :-1]
+#
 # a = np.array([[1, 2], [3, 4], [5, 6], [7, 8]])
 # a[0:2, -1]
 # a[3, -1]
@@ -184,7 +184,6 @@ X_val_reg = X_val_reg.reshape(X_val_reg.shape[0], -1)
 
 # X_train_reg.shape
 # X_val_reg.shape
-
 
 
 X_test_reg = np.array(test_reg.iloc[:, :-1])
@@ -251,7 +250,7 @@ plotting(y_val_reg, y_test_reg, pred_test_lr, mae_lr, WINDOW, PREDICTION_SCOPE)
 # The methodology followed by this algorithm is the following.
 # XGBoost uses a Greedy algorithm for the building of its tree,
 # meaning it uses a simple intuitive way to optimze the algorithm.
-# This is done by making a prediction (which acts as a threshols),
+# This is done by making a prediction (which acts as a thresholds),
 # before starting to evaluate the rest of the observations,
 # which then turn into other thresholds, and so on.
 #
@@ -281,17 +280,16 @@ PREDICTION_SCOPE = 0
 
 stock_prices = feature_engineering(stock_prices, SPY)
 
-stock_prices["Adj Close"].rolling(1).quantile(1)
-
-stock_prices.iloc[-2:]
+# stock_prices["Adj Close"].rolling(1).quantile(1)
+# stock_prices.iloc[-2:]
 
 
 train, test = train_test_split(stock_prices, WINDOW)
 train_set, validation_set = train_validation_split(train, PERCENTAGE)
 
-print(f"train_set shape: {train_set.shape}")
-print(f"validation_set shape: {validation_set.shape}")
-print(f"test shape: {test.shape}")
+# print(f"train_set shape: {train_set.shape}")
+# print(f"validation_set shape: {validation_set.shape}")
+# print(f"test shape: {test.shape}")
 
 
 # Here are some functions that pretend to ease us the work while
@@ -307,10 +305,10 @@ y_train = np.array(y_train)
 X_val = np.array(X_val)
 y_val = np.array(y_val)
 
-print(f"X_train shape: {X_train.shape}")
-print(f"y_train shape: {y_train.shape}")
-print(f"X_val shape: {X_val.shape}")
-print(f"y_val shape: {y_val.shape}")
+# print(f"X_train shape: {X_train.shape}")
+# print(f"y_train shape: {y_train.shape}")
+# print(f"X_val shape: {X_val.shape}")
+# print(f"y_val shape: {y_val.shape}")
 
 
 # Reshaping the Data
@@ -318,8 +316,8 @@ print(f"y_val shape: {y_val.shape}")
 X_train = X_train.reshape(X_train.shape[0], -1)
 X_val = X_val.reshape(X_val.shape[0], -1)
 
-print(f"X_train shape: {X_train.shape}")
-print(f"X_val shape: {X_val.shape}")
+# print(f"X_train shape: {X_train.shape}")
+# print(f"X_val shape: {X_val.shape}")
 
 
 mae, xgb_model = xgb_model_fun(X_train, y_train, X_val, y_val, plotting=True)
@@ -339,37 +337,38 @@ plt.show()
 
 # ## Add the predictions (if needed)
 
-# try:
-# y_hat_train = np.expand_dims(xgb_model.predict(X_train), 1)
-# array = np.empty((stock_prices.shape[0]-y_hat_train.shape[0], 1))
-# array[:] = np.nan
-# predictions = np.concatenate((array, y_hat_train))
-# except NameError:
-# print("No Model")
+try:
+    y_hat_train = np.expand_dims(xgb_model.predict(X_train), axis=1)
+    array = np.empty((stock_prices.shape[0] - y_hat_train.shape[0], 1))
+    array[:] = np.nan
+    # concat (y_hat_train, array) should be correct?
+    predictions = np.concatenate((array, y_hat_train))
+except NameError:
+    print("No Model")
 
 
-# new_stock_prices = feature_engineering(stock_prices, SPY, predictions=predictions)
+new_stock_prices = feature_engineering(stock_prices, SPY, predictions=predictions)
 
 
-# train, test = train_test_split(new_stock_prices, WINDOW)
+train, test = train_test_split(new_stock_prices, WINDOW)
 
-# train_set, validation_set = train_validation_split(train, PERCENTAGE)
-# X_train, y_train, X_val, y_val = windowing(train_set, validation_set, WINDOW, PREDICTION_SCOPE)
+train_set, validation_set = train_validation_split(train, PERCENTAGE)
+X_train, y_train, X_val, y_val = windowing(train_set, validation_set, WINDOW, PREDICTION_SCOPE)
 
-# Reshaping the data
-# X_train = np.array(X_train)
-# y_train = np.array(y_train)
+Reshaping the data
+X_train = np.array(X_train)
+y_train = np.array(y_train)
 
-# X_val = np.array(X_val)
-# y_val = np.array(y_val)
+X_val = np.array(X_val)
+y_val = np.array(y_val)
 
-# X_train = X_train.reshape(X_train.shape[0], -1)
-# X_val = X_val.reshape(X_val.shape[0], -1)
+X_train = X_train.reshape(X_train.shape[0], -1)
+X_val = X_val.reshape(X_val.shape[0], -1)
 
 
-# new_mae, new_xgb_model = xgb_model_fun(X_train, y_train, X_val, y_val, plotting=True)
+new_mae, new_xgb_model = xgb_model_fun(X_train, y_train, X_val, y_val, plotting=True)
 
-# print(new_mae)
+print(new_mae)
 
 
 # ## Evaluation on the Test Set

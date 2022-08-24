@@ -12,6 +12,7 @@ import seaborn as sns
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
+from tqdm import tqdm
 from xgboost import XGBRegressor, plot_importance, DMatrix
 import yfinance as yf
 from src.model.analysis import (
@@ -279,7 +280,7 @@ class TestBuildData:
             }
         )
         df = pd_series.to_frame()
-        train_test_dict = train_test_split(df, window=2)
+        train_test_dict = train_test_split(df, threshold=2)
         train = train_test_dict["train"]
         train_expected = pd.Series(
             {
@@ -319,7 +320,7 @@ class TestBuildData:
         val_expected = np.array([[5]])
         assert assert_array_equal(val, val_expected) is None
 
-    def test_windowing_should_return_expected(self):
+    def test_windowing_for_size_2_pred_scope_0_should_return_expected(self):
         data = np.array(
             [
                 [11, 12, 13],
@@ -329,26 +330,48 @@ class TestBuildData:
                 [51, 52, 53],
             ]
         )
-        input_target_dict = windowing(data, window=2, prediction_scope=0)
+        window_size = 2
+        prediction_scope = 0
+        input_target_dict = windowing(
+            data, window=window_size, prediction_scope=0
+        )
         input_data = input_target_dict["input"]
         input_data_expected = np.array(
             [[[11, 12], [21, 22]], [[21, 22], [31, 32]], [[31, 32], [41, 42]]]
         )
+        assert len(input_data) == len(data) - window_size - prediction_scope
         assert assert_array_equal(input_data, input_data_expected) is None
 
         target_data = input_target_dict["target"]
         target_data_expected = np.array([33, 43, 53])
+        assert len(input_data) == len(target_data)
         assert assert_array_equal(target_data, target_data_expected) is None
 
-        input_target_dict = windowing(data, window=2, prediction_scope=1)
+    def test_windowing_for_size_2_pred_scope_1_should_return_expected(self):
+        data = np.array(
+            [
+                [11, 12, 13],
+                [21, 22, 23],
+                [31, 32, 33],
+                [41, 42, 43],
+                [51, 52, 53],
+            ]
+        )
+        window_size = 2
+        prediction_scope = 1
+        input_target_dict = windowing(
+            data, window=window_size, prediction_scope=prediction_scope
+        )
         input_data = input_target_dict["input"]
         input_data_expected = np.array(
             [[[11, 12], [21, 22]], [[21, 22], [31, 32]]]
         )
+        assert len(input_data) == len(data) - window_size - prediction_scope
         assert assert_array_equal(input_data, input_data_expected) is None
 
         target_data = input_target_dict["target"]
         target_data_expected = np.array([43, 53])
+        assert len(input_data) == len(target_data)
         assert assert_array_equal(target_data, target_data_expected) is None
 
     def test_make_1d_array_should_return_expected(self):
@@ -490,6 +513,39 @@ class TestBuildData:
 
         # is this correct? predictions = np.concatenate((y_hat_train, array))
         predictions = np.concatenate((array, y_hat_train))
+
+    @pytest.mark.skip("Takes long time")
+    def test_preped_data_with_xgb_should_work_expected(self):
+        # for percentage in tqdm([0.92, 0.95, 0.97, 0.98, 0.99, 0.995]):
+        for percentage in tqdm([0.995, 0.99, 0.98, 0.97, 0.95, 0.92]):
+            # for window in [1, 2, 3, 4, 5, 6, 7, 10, 20, 25, 30, 35]:
+            for window in [35, 30, 25, 20, 10, 7, 6, 5, 4, 3, 2, 1]:
+                data_dict = data_prep_for_fitting(
+                    target_tic="AAPL",
+                    target_col="Close",
+                    ref_tic="SPY",
+                    start_date="1993-11-30",
+                    end_date="2022-08-19",
+                    window=window,
+                    percentage=percentage,
+                    prediction_scope=0,
+                )
+
+                x_train = data_dict["x_train"]
+                y_train = data_dict["y_train"]
+                x_val = data_dict["x_val"]
+                y_val = data_dict["y_val"]
+                x_test = data_dict["x_test"]
+                y_test = data_dict["y_test"]
+                features = data_dict["features"]
+
+                xgb_model = XGBRegressor(gamma=1)
+                xgb_model.fit(x_train, y_train)
+
+                pred_val = xgb_model.predict(x_val)
+                mae = mean_absolute_error(y_val, pred_val)
+
+                pred_test = xgb_model.predict(x_test)
 
     @pytest.mark.skip("Need to implement for testing")
     def test_plot(self):
