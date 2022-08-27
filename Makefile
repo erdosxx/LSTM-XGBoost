@@ -22,11 +22,11 @@ lint:
 
 .PHONY: qtconsole
 qtconsole:
-	jupyter qtconsole --kernel=lstm-xgboost &
+	jupyter qtconsole --kernel=lstm_xgboost &
 
 .PHONY: jupyter
 jupyter:
-	jupyter notebook --kernel=lstm-xgboost &
+	jupyter notebook --kernel=lstm_xgboost &
 
 .PHONY: test
 test:
