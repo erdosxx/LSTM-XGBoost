@@ -1,9 +1,12 @@
 from datetime import timedelta
+import pandas as pd
 from pandas.core.series import Series
 from pandas.core.frame import DataFrame
+from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.stats as st
+import tensorflow as tf
 import yfinance as yf
 from typing import Union
 
@@ -152,8 +155,8 @@ def put_column_to_last(df: DataFrame, col: str) -> DataFrame:
     return df[col_list]
 
 
-def train_test_split(df: DataFrame, threshold: int) -> dict[str, DataFrame]:
-    return {"train": df.iloc[:-threshold], "test": df.iloc[-threshold:]}
+def nontest_test_split(df: DataFrame, threshold: int) -> dict[str, DataFrame]:
+    return {"nontest": df.iloc[:-threshold], "test": df.iloc[-threshold:]}
 
 
 def train_validation_split(
@@ -314,11 +317,6 @@ def plot_list(
     )
 
 
-# target: "AAPL"
-# ref: "SPY"
-# start_date: "2001-11-30"
-# end_date: "2022-08-19"
-# target_col: "Close"
 def data_prep_for_fitting(
     target_tic: str,
     target_col: str,
@@ -328,21 +326,22 @@ def data_prep_for_fitting(
     window: int,
     percentage: float,
     prediction_scope: int,
+    is_lstm: bool = False,
 ) -> Union[dict[str, np.ndarray], dict[str, DataFrame]]:
     try:
         price_dict = download_price_dict(
             tickers=(target_tic, ref_tic), start=start_date, end=end_date
         )
         target_price = price_dict[target_tic]
-        data_size = len(target_price)
-        train_size = data_size - window
-        val_size = train_size - int(train_size * percentage)
-        val_window_size = val_size - window - prediction_scope
-        assert val_window_size > 0
+        val_window_data_size = get_val_window_data_size(
+            target_price, window, percentage, prediction_scope
+        )
+
+        assert val_window_data_size > 0
     except AssertionError as ae:
         print(
-            f"Not enough data size, {data_size} for "
-            f"validation window data, ({val_window_size} <= 0) "
+            f"Not enough data size, {len(target_price)} for "
+            f"validation window data, ({val_window_data_size} <= 0) "
             f"for window {window} and percentage {percentage}, "
             f"prediction scope {prediction_scope}"
         )
@@ -360,49 +359,186 @@ def data_prep_for_fitting(
         target_price_feat, target_col_new_name
     )
 
-    train_test_dict = train_test_split(
+    nontest_test_dict = nontest_test_split(
         target_price_feat_reordered, threshold=window
     )
-    train_reg = train_test_dict["train"]
-    test_reg = train_test_dict["test"]
+    nontest_data = nontest_test_dict["nontest"]
+    test_data = nontest_test_dict["test"].to_numpy()
 
-    train_val_dict = train_validation_split(train_reg, percentage=percentage)
-    train_set_reg = train_val_dict["train"]
-    validation_set_reg = train_val_dict["validation"]
-
-    # train_reg_size = len(price_dict[target_tic]) - window
-    # val_set_size = train_reg_size - int(train_reg_size * percentage)
-    # val_set_size = len(train_reg) - int(len(train_reg) * percentage)
-    # val_size = len(validation_set_reg) - window - prediction_scope
-    # val_size = val_set_size - window - prediction_scope
-    # print("val size", val_size)
-    # assert val_size > 0
-
-    input_target_train_dict = windowing(
-        train_set_reg, window=window, prediction_scope=prediction_scope
+    train_val_dict = train_validation_split(
+        nontest_data, percentage=percentage
     )
-    x_train_reg = input_target_train_dict["input"]
-    y_train_reg = input_target_train_dict["target"]
-    input_target_val_dict = windowing(
-        validation_set_reg, window=window, prediction_scope=prediction_scope
+    train_set_data = train_val_dict["train"]
+    validation_set_data = train_val_dict["validation"]
+
+    if is_lstm:
+        # train_set_data = transform_min_max_scaler(
+        #     target=train_set_data, base=train_set_data
+        # )
+        # validation_set_data = transform_min_max_scaler(
+        #     target=validation_set_data, base=train_set_data
+        # )
+        # test_data = transform_min_max_scaler(
+        #     target=test_data, base=train_set_data
+        # )
+        train_set_data = transform_min_max_scaler(
+            target=train_set_data, base=target_price_feat_reordered.to_numpy()
+        )
+        validation_set_data = transform_min_max_scaler(
+            target=validation_set_data,
+            base=target_price_feat_reordered.to_numpy(),
+        )
+        test_data = transform_min_max_scaler(
+            target=test_data, base=target_price_feat_reordered.to_numpy()
+        )
+
+    x_y_train_dict = windowing(
+        train_set_data, window=window, prediction_scope=prediction_scope
     )
-    x_val_reg = input_target_val_dict["input"]
-    y_val_reg = input_target_val_dict["target"]
+    x_train_data = x_y_train_dict["input"]
+    y_train_data = x_y_train_dict["target"]
 
-    x_train_reg_1d = x_train_reg.reshape(x_train_reg.shape[0], -1)
-    x_val_reg_1d = x_val_reg.reshape(x_val_reg.shape[0], -1)
+    x_y_val_dict = windowing(
+        validation_set_data, window=window, prediction_scope=prediction_scope
+    )
+    x_val_data = x_y_val_dict["input"]
+    y_val_data = x_y_val_dict["target"]
 
-    x_test_reg_1d = np.array(test_reg.iloc[:, :-1])
-    y_test_reg_1d = np.array(test_reg.iloc[:, -1])
+    x_test_data_matrix = test_data[:, :-1]
+    y_test_data_col_vector = test_data[:, -1]
 
-    x_test_reg_1d_rs = x_test_reg_1d.reshape(1, -1)
+    if is_lstm:
+        return {
+            "features": target_price_feat_reordered,
+            "x_train": x_train_data,
+            "y_train": y_train_data,
+            "x_val": x_val_data,
+            "y_val": y_val_data,
+            "x_test": x_test_data_matrix,
+            "y_test": y_test_data_col_vector,
+        }
+
+    x_train_data_reshaped = x_train_data.reshape(x_train_data.shape[0], -1)
+    x_val_data_reshaped = x_val_data.reshape(x_val_data.shape[0], -1)
+    x_test_data_reshaped = x_test_data_matrix.reshape(1, -1)
 
     return {
         "features": target_price_feat_reordered,
-        "x_train": x_train_reg_1d,
-        "y_train": y_train_reg,
-        "x_val": x_val_reg_1d,
-        "y_val": y_val_reg,
-        "x_test": x_test_reg_1d_rs,
-        "y_test": y_test_reg_1d,
+        "x_train": x_train_data_reshaped,
+        "y_train": y_train_data,
+        "x_val": x_val_data_reshaped,
+        "y_val": y_val_data,
+        "x_test": x_test_data_reshaped,
+        "y_test": y_test_data_col_vector,
     }
+
+
+def get_val_window_data_size(
+    target_price: DataFrame,
+    window: int,
+    percentage: float,
+    prediction_scope: int,
+) -> int:
+    data_size = len(target_price)
+    train_size = data_size - window
+    val_size = train_size - int(train_size * percentage)
+    val_window_size = val_size - window - prediction_scope
+
+    return val_window_size
+
+
+def transform_min_max_scaler(
+    target: np.ndarray, base: np.ndarray, feature_range: tuple = (0, 1)
+) -> np.ndarray:
+    scaler = MinMaxScaler(feature_range=feature_range)
+    scaler.fit(base)
+
+    return scaler.transform(target)
+
+
+def setup_lstm_model(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    x_val: np.ndarray,
+    y_val: np.ndarray,
+    epoch_n: int,
+    batch_size: int,
+    threshold: float,
+):
+    class myCallback(tf.keras.callbacks.Callback):
+        def on_epoch_end(self, epoch, logs={}):
+            if logs.get("val_mae") < threshold:
+                print("\n Accuracy % so cancelling training")
+                self.model.stop_training = True
+
+    callbacks = myCallback()
+
+    model = tf.keras.models.Sequential(
+        [
+            tf.keras.layers.LSTM(
+                units=32,
+                input_shape=x_train.shape[1:],
+                return_sequences=True,
+            ),
+            tf.keras.layers.LSTM(units=32, return_sequences=False),
+            tf.keras.layers.Dense(units=1),
+        ]
+    )
+
+    lr_schedule = tf.keras.callbacks.LearningRateScheduler(
+        lambda epoch: 0.228 * 10 ** (-epoch / 20)
+    )
+    # optimizer = tf.keras.optimizers.SGD(learning_rate=0.228, momentum=0.85)
+    optimizer = tf.keras.optimizers.SGD(momentum=0.85)
+    model.compile(
+        loss=tf.keras.losses.Huber(), optimizer=optimizer, metrics="mae"
+    )
+    model.fit(
+        x_train,
+        y_train,
+        batch_size=batch_size,
+        epochs=epoch_n,
+        callbacks=[callbacks, lr_schedule],
+        # callbacks=[callbacks],
+        validation_data=[x_val, y_val],
+        verbose=1,
+    )
+
+    return model
+
+
+def inverse_transformation(
+    X: np.ndarray, y: np.ndarray, y_hat: np.ndarray, scaler: MinMaxScaler
+) -> dict[str, DataFrame]:
+    if X.shape[1] > 1:  # for validation and training data with windowing
+        new_X = []
+
+        for i in range(len(X)):
+            # add every first time data because other time
+            # data are duplicated in the next row
+            new_X.append(X[i][0])
+
+        new_X = np.array(new_X)
+        new_X = pd.DataFrame(new_X)
+
+        y = np.expand_dims(y, axis=1)  # covert row -> col vector
+        y = pd.DataFrame(y)
+        y_hat = pd.DataFrame(y_hat)
+
+    else:  # for testing data without windowing
+        # (30, 1, 67) -> (30, 67)
+        X = X.reshape(X.shape[0], X.shape[1] * X.shape[2])
+        new_X = pd.DataFrame(X)
+
+        y = pd.DataFrame(y)
+        y_hat = pd.DataFrame(y_hat)
+        y_hat = pd.concat((y, y_hat))   # for y_hat no matching features
+        y_hat.index = range(len(y_hat))
+
+    real_val = np.array(pd.concat((new_X, y), axis=1))
+    pred_val = np.array(pd.concat((new_X, y_hat), axis=1))
+
+    real_val = pd.DataFrame(scaler.inverse_transform(real_val))
+    pred_val = pd.DataFrame(scaler.inverse_transform(pred_val))
+
+    return {"real": real_val, "pred": pred_val}

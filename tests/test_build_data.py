@@ -3,7 +3,7 @@ import datetime as dt
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
-from numpy.testing import assert_array_equal
+from numpy.testing import assert_array_equal, assert_allclose
 import pandas as pd
 from pandas import testing as tm
 from pandas.core.frame import DataFrame
@@ -12,6 +12,8 @@ import seaborn as sns
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
+from sklearn.preprocessing import MinMaxScaler
+import tensorflow as tf
 from tqdm import tqdm
 from xgboost import XGBRegressor, plot_importance, DMatrix
 import yfinance as yf
@@ -24,12 +26,15 @@ from src.model.analysis import (
     plot_series,
     get_cumprod_dict,
     add_features,
-    train_test_split,
+    nontest_test_split,
     train_validation_split,
     windowing,
     put_column_to_last,
     plot_concat_data,
     data_prep_for_fitting,
+    transform_min_max_scaler,
+    setup_lstm_model,
+    inverse_transformation,
 )
 
 
@@ -280,8 +285,8 @@ class TestBuildData:
             }
         )
         df = pd_series.to_frame()
-        train_test_dict = train_test_split(df, threshold=2)
-        train = train_test_dict["train"]
+        train_test_dict = nontest_test_split(df, threshold=2)
+        train = train_test_dict["nontest"]
         train_expected = pd.Series(
             {
                 "2001-12-01": 1,
@@ -414,6 +419,7 @@ class TestBuildData:
             window=2,
             percentage=0.995,
             prediction_scope=0,
+            is_lstm=False,
         )
         x_train = data_dict["x_train"]
         y_train = data_dict["y_train"]
@@ -516,9 +522,7 @@ class TestBuildData:
 
     @pytest.mark.skip("Takes long time")
     def test_preped_data_with_xgb_should_work_expected(self):
-        # for percentage in tqdm([0.92, 0.95, 0.97, 0.98, 0.99, 0.995]):
         for percentage in tqdm([0.995, 0.99, 0.98, 0.97, 0.95, 0.92]):
-            # for window in [1, 2, 3, 4, 5, 6, 7, 10, 20, 25, 30, 35]:
             for window in [35, 30, 25, 20, 10, 7, 6, 5, 4, 3, 2, 1]:
                 data_dict = data_prep_for_fitting(
                     target_tic="AAPL",
@@ -529,6 +533,7 @@ class TestBuildData:
                     window=window,
                     percentage=percentage,
                     prediction_scope=0,
+                    is_lstm=False,
                 )
 
                 x_train = data_dict["x_train"]
@@ -546,6 +551,169 @@ class TestBuildData:
                 mae = mean_absolute_error(y_val, pred_val)
 
                 pred_test = xgb_model.predict(x_test)
+
+    def test_minmaxscaler_should_return_expected(self):
+        data_list = [[1, 20], [5, 60], [7, 80], [10, 100]]
+        data = np.array(data_list)
+        scaler = MinMaxScaler() 
+        scaler.fit(data)
+        out_range_data = np.array([[20, 200]])
+        out_range_trans = scaler.transform(out_range_data)
+        out_range_trans_expected = np.array(
+            [
+                [(20 - 1)/(10 - 1), (200 - 20)/(100 - 20)]
+            ]
+        )
+        assert (
+            np.testing.assert_allclose(out_range_trans, out_range_trans_expected)
+            is None
+        )
+        out_range_restore = scaler.inverse_transform(out_range_trans)
+        assert (
+            np.testing.assert_allclose(out_range_restore, out_range_data)
+            is None
+        )
+
+
+    def test_transform_minmaxscaler_should_return_expected(self):
+        data_list = [[1, 20], [5, 60], [7, 80], [10, 100]]
+        data = np.array(data_list)
+        data_transformed = transform_min_max_scaler(target=data, base=data)
+        transform_expected = np.array(
+            [
+                [(1 - 1) / (10 - 1), (20 - 20) / (100 - 20)],
+                [(5 - 1) / (10 - 1), (60 - 20) / (100 - 20)],
+                [(7 - 1) / (10 - 1), (80 - 20) / (100 - 20)],
+                [(10 - 1) / (10 - 1), (100 - 20) / (100 - 20)],
+            ]
+        )
+        assert (
+            np.testing.assert_allclose(data_transformed, transform_expected)
+            is None
+        )
+
+        base_list = data_list + [[0, 0], [20, 200]]
+        base = np.array(base_list)
+        data_transformed = transform_min_max_scaler(target=data, base=base)
+        transform_expected = np.array(
+            [
+                [(1 - 0) / (20 - 0), (20 - 0) / (200 - 0)],
+                [(5 - 0) / (20 - 0), (60 - 0) / (200 - 0)],
+                [(7 - 0) / (20 - 0), (80 - 0) / (200 - 0)],
+                [(10 - 0) / (20 - 0), (100 - 0) / (200 - 0)],
+            ]
+        )
+        assert (
+            np.testing.assert_allclose(data_transformed, transform_expected)
+            is None
+        )
+
+    def test_lstm_fitting_works_as_expected(self):
+        data_dict = data_prep_for_fitting(
+            target_tic="AAPL",
+            target_col="Close",
+            ref_tic="SPY",
+            start_date="1993-11-30",
+            end_date="2022-08-19",
+            window=30,
+            percentage=0.98,
+            prediction_scope=0,
+            is_lstm=True,
+        )
+
+        x_train = data_dict["x_train"]
+        y_train = data_dict["y_train"]
+        x_val = data_dict["x_val"]
+        y_val = data_dict["y_val"]
+        x_test = data_dict["x_test"]
+        y_test = data_dict["y_test"]
+        features = data_dict["features"]
+
+        model_lstm = setup_lstm_model(
+            x_train=x_train,
+            y_train=y_train,
+            x_val=x_val,
+            y_val=y_val,
+            epoch_n=50,
+            batch_size=20,
+            threshold=0.031,
+        )
+        y_hat_lstm = model_lstm.predict(x_val)
+        y_hat_train_lstm = model_lstm.predict(x_train)
+        mae_lstm = mean_absolute_error(y_val, y_hat_lstm)
+
+    def test_inverse_transform_return_expected(self):
+        data_dict = data_prep_for_fitting(
+            target_tic="AAPL",
+            target_col="Close",
+            ref_tic="SPY",
+            start_date="1993-11-30",
+            end_date="2022-08-19",
+            window=30,
+            percentage=0.98,
+            prediction_scope=0,
+            is_lstm=True,
+        )
+
+        x_train = data_dict["x_train"]
+        y_train = data_dict["y_train"]
+        x_val = data_dict["x_val"]
+        y_val = data_dict["y_val"]
+        x_test = data_dict["x_test"]
+        y_test = data_dict["y_test"]
+        features = data_dict["features"]
+
+        model_lstm = setup_lstm_model(
+            x_train=x_train,
+            y_train=y_train,
+            x_val=x_val,
+            y_val=y_val,
+            epoch_n=50,
+            batch_size=20,
+            threshold=0.031,
+        )
+        y_val_hat_lstm = model_lstm.predict(x_val)
+        y_val_hat_lstm.shape
+
+        x_val.shape
+        x_val[0][0].shape
+        y_val.shape  # (114,)
+
+        x_test  
+        x_test.shape  # (30, 67)
+        x_test_formula = x_test.reshape(x_test.shape[0], 1, x_test.shape[1])
+        x_test_formula.shape  # (30, 1, 67)
+        x_test_new = x_test_formula.reshape(1, x_test_formula.shape[0], x_test_formula.shape[2])
+        x_test_new.shape  # (1, 30, 67)
+        x_test_new2 = np.expand_dims(x_test, axis=0)
+        x_test_new2.shape  # (30, 67) ---> (1, 30, 67)
+        x_test_new2
+
+        pred_test_lstm = model_lstm.predict(x_test_new2)
+
+        pred_test_lstm.shape  # (1, 1)
+        y_test.shape  # (30,)
+
+
+
+
+    @pytest.mark.skip("Need to fix bug")
+    def test_keras_lstm_should_return_expected(self):
+        inputs = tf.random.normal([32, 10, 8])
+        lstm_m1 = tf.keras.layers.LSTM(units=4)
+        output = lstm_m1(inputs)
+        output_shape_expected = tf.TensorShape([32, 4])
+        assert output.shape == output_shape_expected
+
+        lstm_m2 = tf.keras.layers.LSTM(
+            units=4, return_sequences=True, return_state=True
+        )
+        whole_seq_output, final_memory_state, final_carry_state = lstm_m2(
+            inputs
+        )
+        assert whole_seq_output.shape == tf.TensorShape([32, 10, 4])
+        assert final_memory_state.shape == tf.TensorShape([32, 4])
+        assert final_carry_state.shape == tf.TensorShape([32, 4])
 
     @pytest.mark.skip("Need to implement for testing")
     def test_plot(self):
