@@ -355,7 +355,7 @@ train, test = train_test_split(new_stock_prices, WINDOW)
 train_set, validation_set = train_validation_split(train, PERCENTAGE)
 X_train, y_train, X_val, y_val = windowing(train_set, validation_set, WINDOW, PREDICTION_SCOPE)
 
-Reshaping the data
+# Reshaping the data
 X_train = np.array(X_train)
 y_train = np.array(y_train)
 
@@ -581,12 +581,12 @@ real_val, pred_val = inverse_transformation(X_val_lstm, y_val_lstm, y_hat_lstm)
 mae_lstm = mean_absolute_error(real_val.iloc[:, 49], pred_val.iloc[:, 49])
 
 
-plt.figure(figsize=(15, 6))
+# plt.figure(figsize=(15, 6))
+# 
+# plt.plot(real_val.iloc[:, 49])
+# plt.plot(pred_val.iloc[:, 49])
 
-plt.plot(real_val.iloc[:, 49])
-plt.plot(pred_val.iloc[:, 49])
-
-plt.title(f"MAE for this period: {round(mae_lstm, 2)}")
+# plt.title(f"MAE for this period: {round(mae_lstm, 2)}")
 
 
 real_train, pred_train = inverse_transformation(
@@ -594,10 +594,10 @@ real_train, pred_train = inverse_transformation(
 )
 
 
-plt.figure(figsize=(18, 6))
-
-plt.plot(real_train.iloc[4000:, 49])
-plt.plot(pred_train.iloc[4000:, 49])
+# plt.figure(figsize=(18, 6))
+# 
+# plt.plot(real_train.iloc[4000:, 49])
+# plt.plot(pred_train.iloc[4000:, 49])
 
 
 # ## Prediction
@@ -607,7 +607,7 @@ X_test_formula = X_test_lstm.reshape(
 )
 
 
-X_test_formula.shape
+# X_test_formula.shape
 
 
 X_test_lstm = X_test_formula.reshape(
@@ -615,7 +615,7 @@ X_test_lstm = X_test_formula.reshape(
 )
 
 
-X_test_lstm.shape
+# X_test_lstm.shape
 
 
 y_hat_test_lstm = model_lstm.predict(X_test_lstm)

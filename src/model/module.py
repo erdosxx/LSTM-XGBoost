@@ -252,7 +252,7 @@ def plotting(
     plt.show()
 
 
-def inverse_transformation(X: np.ndarray, y: np.ndarray, y_hat):
+def inverse_transformation(X: np.ndarray, y: np.ndarray, y_hat: np.ndarray):
     """
     This function serves to inverse the rescaled data.
     There are two ways in which this can happen:
@@ -386,7 +386,14 @@ def xgb_model_fun(X_train, y_train, X_val, y_val, plotting=False):
 
 
 def lstm_model_fun(
-    X_train, y_train, X_val, y_val, EPOCH, BATCH_SIZE, CALLBACK, plotting=False
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    EPOCH: int,
+    BATCH_SIZE: int,
+    CALLBACK: float,
+    plotting=False,
 ):
     class myCallback(tf.keras.callbacks.Callback):
         def on_epoch_end(self, epoch, logs={}):
@@ -399,12 +406,12 @@ def lstm_model_fun(
     model = tf.keras.models.Sequential(
         [
             tf.keras.layers.LSTM(
-                32,
+                units=32,
                 input_shape=(X_train.shape[1], X_train.shape[2]),
                 return_sequences=True,
             ),
-            tf.keras.layers.LSTM(32),
-            tf.keras.layers.Dense(1),
+            tf.keras.layers.LSTM(units=32),
+            tf.keras.layers.Dense(units=1),
         ]
     )
 
