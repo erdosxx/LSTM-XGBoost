@@ -28,9 +28,13 @@ qtconsole:
 jupyter:
 	jupyter notebook --kernel=lstm_xgboost &
 
+.PHONY: ptest
+ptest:
+	pytest -n auto -vv -s tests
+
 .PHONY: test
 test:
-	pytest -n auto -vv -s tests
+	pytest -vv -s tests
 
 .PHONY: clean
 clean:
