@@ -1,5 +1,5 @@
-.PHONY: typehint
-typehint:
+.PHONY: checktype
+checktype:
 	mypy --ignore-missing-imports src/
 
 .PHONY: install
