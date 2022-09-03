@@ -1,5 +1,6 @@
-import pytest
 import datetime as dt
+from pathlib import Path
+import pytest
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,8 +16,7 @@ from sklearn.metrics import mean_absolute_error
 from sklearn.preprocessing import MinMaxScaler
 import tensorflow as tf
 from tqdm import tqdm
-from xgboost import XGBRegressor, plot_importance, DMatrix
-import yfinance as yf
+from xgboost import XGBRegressor, plot_importance
 from src.model.analysis import (
     get_shifted_log_rets,
     download_price_dict,
@@ -26,15 +26,15 @@ from src.model.analysis import (
     plot_series,
     get_cumprod_dict,
     add_features,
-    nontest_test_split,
-    train_validation_split,
+    make_train_val_test_set,
     windowing,
     put_column_to_last,
     plot_concat_data,
     data_prep_for_fitting,
     transform_min_max_scaler,
     setup_lstm_model,
-    inverse_transformation,
+    save_df_json,
+    df_json_reader,
 )
 
 
@@ -230,9 +230,9 @@ class TestBuildData:
         )
         apple_price = stocks_price_dict["AAPL"]
         assert apple_price.isnull().values.any() is np.False_
-        apple_price_feat = add_features(apple_price)
+        apple_price_feat = add_features(apple_price, roll_max=7, shift_max=7)
 
-        assert len(apple_price_feat.columns) == 6 + 9 * 6 + 7
+        assert len(apple_price_feat.columns) == 6 + 8 * 6 + 1 * 7 + 7
         assert "Close" in apple_price_feat.columns
         assert "Close_y" not in apple_price_feat.columns
 
@@ -251,6 +251,26 @@ class TestBuildData:
         tm.assert_frame_equal(
             df_rolling_quantile, df_expected_rolling_quantile
         ) is None
+
+        data_list = [1, 1, 1, 1, 5, 1, 5, 1]
+        df = pd.DataFrame({"Data": data_list})
+        df_rolling_mean = df.rolling(4).mean()
+        df_expected_rolling_mean = pd.DataFrame(
+            {"Data": [np.nan, np.nan, np.nan, 1, 2, 2, 3, 3]}
+        )
+        assert (
+            tm.assert_frame_equal(df_rolling_mean, df_expected_rolling_mean)
+            is None
+        )
+
+        np_rolling_mean = (
+            np.convolve(np.array(data_list), np.ones(4), mode="valid") / 4
+        )
+        np_rolling_mean_expected = np.array([1, 2, 2, 3, 3])
+        assert (
+            assert_array_equal(np_rolling_mean, np_rolling_mean_expected)
+            is None
+        )
 
     def test_pd_timestamp_index_should_work_as_expected(self):
         df = pd.Series(
@@ -274,56 +294,31 @@ class TestBuildData:
         )
         tm.assert_frame_equal(df, df_expected) is None
 
-    def test_train_test_split_should_return_expected(self):
+    def test_make_train_val_test_should_return_expected(self):
         pd_series = pd.Series(
             {
                 "2001-12-01": 1,
                 "2001-12-02": 2,
                 "2001-12-03": 3,
                 "2001-12-04": 4,
-                "2001-12-05": 5,
+                "2001-12-06": 5,
+                "2001-12-07": 6,
+                "2001-12-08": 7,
             }
         )
         df = pd_series.to_frame()
-        train_test_dict = nontest_test_split(df, threshold=2)
-        train = train_test_dict["nontest"]
-        train_expected = pd.Series(
-            {
-                "2001-12-01": 1,
-                "2001-12-02": 2,
-                "2001-12-03": 3,
-            }
-        ).to_frame()
-        assert tm.assert_frame_equal(train, train_expected) is None
-        test = train_test_dict["test"]
-        test_expected = pd.Series(
-            {
-                "2001-12-04": 4,
-                "2001-12-05": 5,
-            }
-        ).to_frame()
-        assert tm.assert_frame_equal(test, test_expected) is None
-
-    def test_train_validation_split_should_return_expected(self):
-        pd_series = pd.Series(
-            {
-                "2001-12-01": 1,
-                "2001-12-02": 2,
-                "2001-12-03": 3,
-                "2001-12-04": 4,
-                "2001-12-05": 5,
-            }
-        )
-        df = pd_series.to_frame()
-        train_val_dict = train_validation_split(df, percentage=0.995)
-
-        train = train_val_dict["train"]
+        train_val_test = make_train_val_test_set(df, window=2, percentage=0.8)
+        train = train_val_test["train"]
         train_expected = np.array([[1], [2], [3], [4]])
         assert assert_array_equal(train, train_expected) is None
 
-        val = train_val_dict["validation"]
+        val = train_val_test["val"]
         val_expected = np.array([[5]])
         assert assert_array_equal(val, val_expected) is None
+
+        test = train_val_test["test"]
+        test_expected = np.array([[6], [7]])
+        assert assert_array_equal(test, test_expected) is None
 
     def test_windowing_for_size_2_pred_scope_0_should_return_expected(self):
         data = np.array(
@@ -409,6 +404,198 @@ class TestBuildData:
         assert df_reordered.iloc[:, -1].name == "a"
         assert df.iloc[:, -1].name == "c"
 
+    def test_save_and_load_df_for_lstm_should_return_same_df(self, tmp_path):
+        data_dict = data_prep_for_fitting(
+            target_tic="AAPL",
+            target_col="Close",
+            ref_tic="SPY",
+            start_date="2022-07-27",
+            end_date="2022-08-19",
+            window=2,
+            percentage=0.75,
+            prediction_scope=0,
+            is_lstm=True,
+            roll_max=7,
+            shift_max=7,
+        )
+        df_feat = data_dict["features"]
+        x_train = data_dict["x_train"]
+        y_train = data_dict["y_train"]
+        x_val = data_dict["x_val"]
+        y_val = data_dict["y_val"]
+        x_test = data_dict["x_test"]
+        y_test = data_dict["y_test"]
+
+        # tmp_path = Path("./tests")
+        file_name = "df_feat_lstm.json"
+
+        save_df_json(
+            df=df_feat, orient="index", save_dir=tmp_path, filename=file_name
+        )
+
+        json_file = tmp_path / file_name
+        loaded_df = df_json_reader(json_file, orient="index")
+
+        assert tm.assert_frame_equal(df_feat, loaded_df) is None
+
+        name_array_list = [
+            {"filename": "x_train_lstm.npy", "array": x_train},
+            {"filename": "y_train_lstm.npy", "array": y_train},
+            {"filename": "x_val_lstm.npy", "array": x_val},
+            {"filename": "y_val_lstm.npy", "array": y_val},
+            {"filename": "x_test_lstm.npy", "array": x_test},
+            {"filename": "y_test_lstm.npy", "array": y_test},
+        ]
+
+        for name_array in name_array_list:
+            np.save(tmp_path / name_array["filename"], name_array["array"])
+            loaded = np.load(tmp_path / name_array["filename"])
+            assert assert_array_equal(name_array["array"], loaded) is None
+
+    def test_save_and_load_df_for_regression_should_return_same_df(
+        self, tmp_path
+    ):
+        data_dict = data_prep_for_fitting(
+            target_tic="AAPL",
+            target_col="Close",
+            ref_tic="SPY",
+            start_date="2022-07-27",
+            end_date="2022-08-19",
+            window=2,
+            percentage=0.75,
+            prediction_scope=0,
+            is_lstm=False,
+            roll_max=7,
+            shift_max=7,
+        )
+        df_feat = data_dict["features"]
+        x_train = data_dict["x_train"]
+        y_train = data_dict["y_train"]
+        x_val = data_dict["x_val"]
+        y_val = data_dict["y_val"]
+        x_test = data_dict["x_test"]
+        y_test = data_dict["y_test"]
+
+        # tmp_path = Path("./tests")
+        file_name = "df_feat_reg.json"
+
+        save_df_json(
+            df=df_feat, orient="index", save_dir=tmp_path, filename=file_name
+        )
+
+        json_file = tmp_path / file_name
+        loaded_df = df_json_reader(json_file, orient="index")
+
+        assert tm.assert_frame_equal(df_feat, loaded_df) is None
+
+        name_array_list = [
+            {"filename": "x_train_reg.npy", "array": x_train},
+            {"filename": "y_train_reg.npy", "array": y_train},
+            {"filename": "x_val_reg.npy", "array": x_val},
+            {"filename": "y_val_reg.npy", "array": y_val},
+            {"filename": "x_test_reg.npy", "array": x_test},
+            {"filename": "y_test_reg.npy", "array": y_test},
+        ]
+
+        for name_array in name_array_list:
+            np.save(tmp_path / name_array["filename"], name_array["array"])
+            loaded = np.load(tmp_path / name_array["filename"])
+            assert assert_array_equal(name_array["array"], loaded) is None
+
+    def test_data_prep_for_regression_lstm_should_return_expected(self):
+        """
+        Download size: 18
+        number of NaN rows by shift: shift_max
+        number of NaN rows by rolling: roll_max - 1
+        """
+
+        shift_max = 7
+        roll_max = 7
+        data_dict_reg = data_prep_for_fitting(
+            target_tic="AAPL",
+            target_col="Close",
+            ref_tic="SPY",
+            start_date="2022-07-27",
+            end_date="2022-08-19",
+            window=2,
+            percentage=0.75,
+            prediction_scope=0,
+            is_lstm=False,
+            roll_max=roll_max,
+            shift_max=shift_max,
+        )
+        df_feat_reg = data_dict_reg["features"]
+        x_train_reg = data_dict_reg["x_train"]
+        y_train_reg = data_dict_reg["y_train"]
+        x_val_reg = data_dict_reg["x_val"]
+        y_val_reg = data_dict_reg["y_val"]
+        x_test_reg = data_dict_reg["x_test"]
+        y_test_reg = data_dict_reg["y_test"]
+
+        print("val data size:", len(x_val_reg))
+
+        download_size = 18
+        assert len(df_feat_reg) == download_size - max(shift_max, roll_max - 1)
+
+        json_file = Path("./tests") / "df_feat_reg.json"
+        loaded_df_reg = df_json_reader(json_file, orient="index")
+
+        assert tm.assert_frame_equal(df_feat_reg, loaded_df_reg) is None
+
+        name_array_list = [
+            {"filename": "x_train_reg.npy", "array": x_train_reg},
+            {"filename": "y_train_reg.npy", "array": y_train_reg},
+            {"filename": "x_val_reg.npy", "array": x_val_reg},
+            {"filename": "y_val_reg.npy", "array": y_val_reg},
+            {"filename": "x_test_reg.npy", "array": x_test_reg},
+            {"filename": "y_test_reg.npy", "array": y_test_reg},
+        ]
+
+        for name_array in name_array_list:
+            loaded_reg = np.load(Path("./tests") / name_array["filename"])
+            assert assert_array_equal(name_array["array"], loaded_reg) is None
+
+        data_dict_lstm = data_prep_for_fitting(
+            target_tic="AAPL",
+            target_col="Close",
+            ref_tic="SPY",
+            start_date="2022-07-27",
+            end_date="2022-08-19",
+            window=2,
+            percentage=0.75,
+            prediction_scope=0,
+            is_lstm=True,
+            roll_max=roll_max,
+            shift_max=shift_max,
+        )
+        df_feat_lstm = data_dict_lstm["features"]
+        x_train_lstm = data_dict_lstm["x_train"]
+        y_train_lstm = data_dict_lstm["y_train"]
+        x_val_lstm = data_dict_lstm["x_val"]
+        y_val_lstm = data_dict_lstm["y_val"]
+        x_test_lstm = data_dict_lstm["x_test"]
+        y_test_lstm = data_dict_lstm["y_test"]
+
+        print("val data size:", len(x_val_lstm))
+
+        json_file = Path("./tests") / "df_feat_lstm.json"
+        loaded_df_lstm = df_json_reader(json_file, orient="index")
+
+        assert tm.assert_frame_equal(df_feat_lstm, loaded_df_lstm) is None
+
+        name_array_list = [
+            {"filename": "x_train_lstm.npy", "array": x_train_lstm},
+            {"filename": "y_train_lstm.npy", "array": y_train_lstm},
+            {"filename": "x_val_lstm.npy", "array": x_val_lstm},
+            {"filename": "y_val_lstm.npy", "array": y_val_lstm},
+            {"filename": "x_test_lstm.npy", "array": x_test_lstm},
+            {"filename": "y_test_lstm.npy", "array": y_test_lstm},
+        ]
+
+        for name_array in name_array_list:
+            loaded_lstm = np.load(Path("./tests") / name_array["filename"])
+            assert assert_array_equal(name_array["array"], loaded_lstm) is None
+
     def test_regression_fitting_should_return_expected(self):
         data_dict = data_prep_for_fitting(
             target_tic="AAPL",
@@ -420,6 +607,8 @@ class TestBuildData:
             percentage=0.995,
             prediction_scope=0,
             is_lstm=False,
+            roll_max=7,
+            shift_max=7,
         )
         x_train = data_dict["x_train"]
         y_train = data_dict["y_train"]
@@ -429,7 +618,6 @@ class TestBuildData:
         y_test = data_dict["y_test"]
         features = data_dict["features"]
 
-        # -----------------
         lr = LinearRegression()
         lr.fit(x_train, y_train)
 
@@ -441,25 +629,12 @@ class TestBuildData:
         print(f"Linear Regression MSE: {mse_lr}")
         print(f"Linear Regression MAE: {mae_lr}")
 
-        rf = RandomForestRegressor()
-        rf.fit(x_train, y_train)
-
-        y_hat_rf = rf.predict(x_val)
-        mae_rf = mean_absolute_error(y_val, y_hat_rf)
-        mse_rf = np.mean((y_hat_rf - y_val) ** 2)
-
-        print(f"Random Forest MSE: {mse_rf}")
-        print(f"Random Forest MAE: {mae_rf}")
-
         assert assert_array_equal(y_hat_lr, np.ravel(y_hat_lr)) is None
-        assert assert_array_equal(y_hat_rf, np.ravel(y_hat_rf)) is None
-        assert assert_array_equal(y_val, np.ravel(y_val)) is None
 
         fig, ax = plt.subplots(figsize=(15, 8))
         ax.plot(y_val, color="red")
         ax.plot(y_hat_lr, color="orange")
-        ax.plot(y_hat_rf, color="grey", alpha=0.2)
-        ax.legend(["True Returns", "Linear Regression", "Random Forest"])
+        ax.legend(["True Returns", "Linear Regression"])
 
         pred_test_lr = lr.predict(x_test)
 
@@ -472,6 +647,68 @@ class TestBuildData:
             window=2,
             prediction_scope=0,
         )
+
+    def test_random_forest_fitting_should_return_expected(self):
+        data_dict = data_prep_for_fitting(
+            target_tic="AAPL",
+            target_col="Close",
+            ref_tic="SPY",
+            start_date="2001-11-30",
+            end_date="2022-08-19",
+            window=2,
+            percentage=0.995,
+            prediction_scope=0,
+            is_lstm=False,
+            roll_max=7,
+            shift_max=7,
+        )
+        x_train = data_dict["x_train"]
+        y_train = data_dict["y_train"]
+        x_val = data_dict["x_val"]
+        y_val = data_dict["y_val"]
+        x_test = data_dict["x_test"]
+        y_test = data_dict["y_test"]
+        features = data_dict["features"]
+
+        rf = RandomForestRegressor()
+        rf.fit(x_train, y_train)
+
+        y_hat_rf = rf.predict(x_val)
+        mae_rf = mean_absolute_error(y_val, y_hat_rf)
+        mse_rf = np.mean((y_hat_rf - y_val) ** 2)
+
+        print(f"Random Forest MSE: {mse_rf}")
+        print(f"Random Forest MAE: {mae_rf}")
+
+        assert assert_array_equal(y_hat_rf, np.ravel(y_hat_rf)) is None
+        assert assert_array_equal(y_val, np.ravel(y_val)) is None
+
+        fig, ax = plt.subplots(figsize=(15, 8))
+        ax.plot(y_val, color="red")
+        ax.plot(y_hat_rf, color="grey", alpha=0.2)
+        ax.legend(["True Returns", "Random Forest"])
+
+    def test_xgboost_fitting_should_return_expected(self):
+        data_dict = data_prep_for_fitting(
+            target_tic="AAPL",
+            target_col="Close",
+            ref_tic="SPY",
+            start_date="2001-11-30",
+            end_date="2022-08-19",
+            window=2,
+            percentage=0.995,
+            prediction_scope=0,
+            is_lstm=False,
+            roll_max=7,
+            shift_max=7,
+        )
+        x_train = data_dict["x_train"]
+        y_train = data_dict["y_train"]
+        x_val = data_dict["x_val"]
+        y_val = data_dict["y_val"]
+        x_test = data_dict["x_test"]
+        y_test = data_dict["y_test"]
+        features = data_dict["features"]
 
         xgb_model = XGBRegressor(gamma=1, n_estimators=200)
         xgb_model.fit(x_train, y_train)
@@ -534,6 +771,8 @@ class TestBuildData:
                     percentage=percentage,
                     prediction_scope=0,
                     is_lstm=False,
+                    roll_max=7,
+                    shift_max=7,
                 )
 
                 x_train = data_dict["x_train"]
@@ -552,28 +791,64 @@ class TestBuildData:
 
                 pred_test = xgb_model.predict(x_test)
 
-    def test_minmaxscaler_should_return_expected(self):
+    def test_minmaxscaler_with_out_range_data_should_return_expected(self):
         data_list = [[1, 20], [5, 60], [7, 80], [10, 100]]
         data = np.array(data_list)
-        scaler = MinMaxScaler() 
+        scaler = MinMaxScaler()
         scaler.fit(data)
         out_range_data = np.array([[20, 200]])
         out_range_trans = scaler.transform(out_range_data)
         out_range_trans_expected = np.array(
-            [
-                [(20 - 1)/(10 - 1), (200 - 20)/(100 - 20)]
-            ]
+            [[(20 - 1) / (10 - 1), (200 - 20) / (100 - 20)]]
         )
         assert (
-            np.testing.assert_allclose(out_range_trans, out_range_trans_expected)
-            is None
+            assert_allclose(out_range_trans, out_range_trans_expected) is None
         )
         out_range_restore = scaler.inverse_transform(out_range_trans)
+        assert assert_allclose(out_range_restore, out_range_data) is None
+
+    def test_minmaxscaler_should_return_in_range_data(self):
+        data_list = [[1, 20], [5, 60], [7, 80], [10, 100]]
+        data = np.array(data_list)
+        scaler = MinMaxScaler()
+        scaler.fit(data)
+        data_transformed = scaler.transform(data_list)
+        condition = (0 <= data_transformed) & (data_transformed <= 1)
+
+        expected = np.ones((4, 2), dtype=bool)
+        assert assert_array_equal(np.asarray(condition), expected) is None
+
+    def test_minmaxscaler_should_return_same_transformed_data(self):
+        data_list = [[1, 20], [5, 60], [7, 80], [10, 100]]
+        data = np.array(data_list)
+        scaler = MinMaxScaler()
+        scaler.fit(data)
+        assert assert_array_equal(scaler.data_min_, np.array([1, 20])) is None
         assert (
-            np.testing.assert_allclose(out_range_restore, out_range_data)
+            assert_array_equal(scaler.data_max_, np.array([10, 100])) is None
+        )
+        assert (
+            assert_array_equal(np.amin(data, axis=0), np.array([1, 20]))
+            is None
+        )
+        assert (
+            assert_array_equal(np.amax(data, axis=0), np.array([10, 100]))
             is None
         )
 
+        target = np.array([[8, 50]])
+        data_transformed = scaler.transform(target)
+        expected = np.array(
+            [
+                [
+                    (8 - scaler.data_min_[0])
+                    / (scaler.data_max_[0] - scaler.data_min_[0]),
+                    (50 - scaler.data_min_[1])
+                    / (scaler.data_max_[1] - scaler.data_min_[1]),
+                ]
+            ]
+        )
+        assert assert_allclose(data_transformed, expected) is None
 
     def test_transform_minmaxscaler_should_return_expected(self):
         data_list = [[1, 20], [5, 60], [7, 80], [10, 100]]
@@ -587,10 +862,7 @@ class TestBuildData:
                 [(10 - 1) / (10 - 1), (100 - 20) / (100 - 20)],
             ]
         )
-        assert (
-            np.testing.assert_allclose(data_transformed, transform_expected)
-            is None
-        )
+        assert assert_allclose(data_transformed, transform_expected) is None
 
         base_list = data_list + [[0, 0], [20, 200]]
         base = np.array(base_list)
@@ -603,10 +875,7 @@ class TestBuildData:
                 [(10 - 0) / (20 - 0), (100 - 0) / (200 - 0)],
             ]
         )
-        assert (
-            np.testing.assert_allclose(data_transformed, transform_expected)
-            is None
-        )
+        assert assert_allclose(data_transformed, transform_expected) is None
 
     def test_lstm_fitting_works_as_expected(self):
         data_dict = data_prep_for_fitting(
@@ -619,6 +888,8 @@ class TestBuildData:
             percentage=0.98,
             prediction_scope=0,
             is_lstm=True,
+            roll_max=7,
+            shift_max=7,
         )
 
         x_train = data_dict["x_train"]
@@ -628,6 +899,8 @@ class TestBuildData:
         x_test = data_dict["x_test"]
         y_test = data_dict["y_test"]
         features = data_dict["features"]
+        target_min = data_dict["target_min"]
+        target_max = data_dict["target_max"]
 
         model_lstm = setup_lstm_model(
             x_train=x_train,
@@ -638,9 +911,42 @@ class TestBuildData:
             batch_size=20,
             threshold=0.031,
         )
-        y_hat_lstm = model_lstm.predict(x_val)
-        y_hat_train_lstm = model_lstm.predict(x_train)
-        mae_lstm = mean_absolute_error(y_val, y_hat_lstm)
+        y_hat_val = model_lstm.predict(x_val)
+
+        y_val_restored = y_val * (target_max - target_min) + target_min
+        y_hat_val_restored = y_hat_val * (target_max - target_min) + target_min
+        mae_val_scaled = mean_absolute_error(y_val, y_hat_val)
+
+        mae_val_restored = mean_absolute_error(
+            y_val_restored, y_hat_val_restored
+        )
+        assert mae_val_restored == pytest.approx(
+            (target_max - target_min) * mae_val_scaled, 0.0000001
+        )
+
+        y_hat_train = model_lstm.predict(x_train)
+        mean_absolute_error(y_train, y_hat_train)
+
+        y_hat_test = model_lstm.predict(x_test)
+        y_hat_test_restored = (
+            y_hat_test * (target_max - target_min) + target_min
+        )
+
+    def test_mean_absolute_error_should_work_regardless_of_row_or_col_vector(
+        self,
+    ):
+        y_true = np.array([1, 1, 1, 1, 1])
+        y_pred = np.array([2, 2, 2, 2, 2])
+        assert mean_absolute_error(y_true, y_pred) == 1.0
+
+        y_true_t = np.expand_dims(y_true, axis=1)
+        y_pred = np.array([2, 2, 2, 2, 2])
+        assert mean_absolute_error(y_true_t, y_pred) == 1.0
+
+        y_pred_t = np.expand_dims(y_pred, axis=1)
+        assert mean_absolute_error(y_true, y_pred_t) == 1.0
+
+        assert mean_absolute_error(y_true_t, y_pred_t) == 1.0
 
     def test_inverse_transform_return_expected(self):
         data_dict = data_prep_for_fitting(
@@ -653,6 +959,8 @@ class TestBuildData:
             percentage=0.98,
             prediction_scope=0,
             is_lstm=True,
+            roll_max=7,
+            shift_max=7,
         )
 
         x_train = data_dict["x_train"]
@@ -668,7 +976,7 @@ class TestBuildData:
             y_train=y_train,
             x_val=x_val,
             y_val=y_val,
-            epoch_n=50,
+            epoch_n=3,
             batch_size=20,
             threshold=0.031,
         )
@@ -679,23 +987,10 @@ class TestBuildData:
         x_val[0][0].shape
         y_val.shape  # (114,)
 
-        x_test  
-        x_test.shape  # (30, 67)
-        x_test_formula = x_test.reshape(x_test.shape[0], 1, x_test.shape[1])
-        x_test_formula.shape  # (30, 1, 67)
-        x_test_new = x_test_formula.reshape(1, x_test_formula.shape[0], x_test_formula.shape[2])
-        x_test_new.shape  # (1, 30, 67)
-        x_test_new2 = np.expand_dims(x_test, axis=0)
-        x_test_new2.shape  # (30, 67) ---> (1, 30, 67)
-        x_test_new2
-
-        pred_test_lstm = model_lstm.predict(x_test_new2)
+        pred_test_lstm = model_lstm.predict(x_test)
 
         pred_test_lstm.shape  # (1, 1)
         y_test.shape  # (30,)
-
-
-
 
     @pytest.mark.skip("Need to fix bug")
     def test_keras_lstm_should_return_expected(self):

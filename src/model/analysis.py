@@ -1,4 +1,7 @@
 from datetime import timedelta
+import json
+from pathlib import Path, PosixPath
+from typing import Union
 import pandas as pd
 from pandas.core.series import Series
 from pandas.core.frame import DataFrame
@@ -8,7 +11,6 @@ import numpy as np
 import scipy.stats as st
 import tensorflow as tf
 import yfinance as yf
-from typing import Union
 
 
 def get_shifted_log_rets(series: Series, shift_val: int = 1) -> Series:
@@ -23,7 +25,7 @@ def download_price_dict(
         output[tic] = yf.download(
             tickers=tic, start=start, end=end, progress=False
         )
-        print(f"Data for {tic} was downloaded with size, {len(output[tic])}")
+        print(f"Downloaded size for {tic}: {len(output[tic])}")
 
     return output
 
@@ -105,9 +107,10 @@ def plot_hist(
     return axes_subplot
 
 
-def add_features(df: DataFrame) -> DataFrame:
+def add_features(df: DataFrame, roll_max: int, shift_max: int) -> DataFrame:
     df_out = df.copy(deep=True)
-    for n_roll in range(2, 8):
+
+    for n_roll in range(2, roll_max + 1):
         df_out[f"Adj_Close_RM{n_roll}"] = (
             df["Adj Close"].rolling(n_roll).mean()
         )
@@ -130,7 +133,7 @@ def add_features(df: DataFrame) -> DataFrame:
 
         df_out[f"High_RSTD{n_roll}"] = df["High"].rolling(n_roll).std()
 
-    for n_shift in range(2, 8):
+    for n_shift in range(1, shift_max + 1):
         df_out[f"Close_S{n_shift}"] = df["Close"].shift(n_shift)
 
     df_out["Day"] = df.index.day
@@ -141,8 +144,6 @@ def add_features(df: DataFrame) -> DataFrame:
 
     df_out["Upper_Shape"] = df["High"] - np.maximum(df["Open"], df["Close"])
     df_out["Lower_Shape"] = np.minimum(df["Open"], df["Close"]) - df["Low"]
-
-    df_out.dropna(axis=0, inplace=True)
 
     return df_out
 
@@ -155,25 +156,11 @@ def put_column_to_last(df: DataFrame, col: str) -> DataFrame:
     return df[col_list]
 
 
-def nontest_test_split(df: DataFrame, threshold: int) -> dict[str, DataFrame]:
-    return {"nontest": df.iloc[:-threshold], "test": df.iloc[-threshold:]}
-
-
-def train_validation_split(
-    df: DataFrame, percentage: float
-) -> dict[str, np.ndarray]:
-    threshold = int(len(df) * percentage)
-
-    return {
-        "train": np.array(df.iloc[:threshold]),
-        "validation": np.array(df.iloc[threshold:]),
-    }
-
-
 def windowing(
     data: np.ndarray, window: int, prediction_scope: int
 ) -> dict[str, np.ndarray]:
     """
+    Condition to get not empty list: len(data) > window + prediction_scope
     Input:
         data:
             [
@@ -184,7 +171,7 @@ def windowing(
                 [51, 52, 53],
             ]
         window: 2
-        prediction_scope: 1
+        prediction_scope: 0
     Output:
         "input":
             [
@@ -203,9 +190,20 @@ def windowing(
     The len(Input) and len(Output) should be same.
     len(Input) == len(Output) == len(data) - window - prediction_scope
     """
+    try:
+        output_length = len(data) - window - prediction_scope
+        assert output_length > 0
+    except AssertionError as ae:
+        print(
+            f"Not enough data. Data length({len(data)}) should be more than "
+            f"{window + prediction_scope}, "
+            f"window: {window}, prediction scope: {prediction_scope}"
+        )
+        raise ae
+
     input_data, target_data = [], []
 
-    for i in range(len(data) - (window + prediction_scope)):
+    for i in range(output_length):
         input_data.append(np.array(data[i : i + window, :-1]))
         target_data.append(np.array(data[i + window + prediction_scope, -1]))
 
@@ -326,86 +324,79 @@ def data_prep_for_fitting(
     window: int,
     percentage: float,
     prediction_scope: int,
-    is_lstm: bool = False,
+    is_lstm: bool,
+    roll_max: int,
+    shift_max: int,
+    target_suffix: str = "_y",
 ) -> Union[dict[str, np.ndarray], dict[str, DataFrame]]:
-    try:
-        price_dict = download_price_dict(
-            tickers=(target_tic, ref_tic), start=start_date, end=end_date
-        )
-        target_price = price_dict[target_tic]
-        val_window_data_size = get_val_window_data_size(
-            target_price, window, percentage, prediction_scope
-        )
+    price_dict = download_price_dict(
+        tickers=(target_tic, ref_tic), start=start_date, end=end_date
+    )
+    target_price = price_dict[target_tic]
 
-        assert val_window_data_size > 0
-    except AssertionError as ae:
-        print(
-            f"Not enough data size, {len(target_price)} for "
-            f"validation window data, ({val_window_data_size} <= 0) "
-            f"for window {window} and percentage {percentage}, "
-            f"prediction scope {prediction_scope}"
-        )
-        raise ae
+    check_required_download_size(
+        target_price,
+        window,
+        percentage,
+        prediction_scope,
+        roll_max,
+        shift_max,
+        is_lstm,
+    )
 
-    target_price_feat = add_features(target_price)
+    target_price_feat = target_price
+    if not is_lstm:
+        target_price_feat = add_features(
+            target_price, roll_max=roll_max, shift_max=shift_max
+        )
+        target_price_feat.dropna(axis=0, inplace=True)
 
     target_price_feat[ref_tic] = price_dict[ref_tic][target_col]
 
-    target_col_new_name = target_col + "_y"
-    target_price_feat.rename(
-        columns={target_col: target_col_new_name}, inplace=True
-    )
-    target_price_feat_reordered = put_column_to_last(
-        target_price_feat, target_col_new_name
+    target_price_feat_reordered = rename_target_col_and_put_it_last(
+        df=target_price_feat, target_col=target_col, suffix=target_suffix
     )
 
-    nontest_test_dict = nontest_test_split(
-        target_price_feat_reordered, threshold=window
+    train_val_test = make_train_val_test_set(
+        target_price_feat_reordered, window, percentage
     )
-    nontest_data = nontest_test_dict["nontest"]
-    test_data = nontest_test_dict["test"].to_numpy()
+    train_set_data = train_val_test["train"]
+    validation_set_data = train_val_test["val"]
+    test_data = train_val_test["test"]
 
-    train_val_dict = train_validation_split(
-        nontest_data, percentage=percentage
-    )
-    train_set_data = train_val_dict["train"]
-    validation_set_data = train_val_dict["validation"]
+    train_set_data_scaled = train_set_data
+    validation_set_data_scaled = validation_set_data
+    test_data_scaled = test_data
 
     if is_lstm:
-        # train_set_data = transform_min_max_scaler(
-        #     target=train_set_data, base=train_set_data
-        # )
-        # validation_set_data = transform_min_max_scaler(
-        #     target=validation_set_data, base=train_set_data
-        # )
-        # test_data = transform_min_max_scaler(
-        #     target=test_data, base=train_set_data
-        # )
-        train_set_data = transform_min_max_scaler(
-            target=train_set_data, base=target_price_feat_reordered.to_numpy()
-        )
-        validation_set_data = transform_min_max_scaler(
-            target=validation_set_data,
-            base=target_price_feat_reordered.to_numpy(),
-        )
-        test_data = transform_min_max_scaler(
-            target=test_data, base=target_price_feat_reordered.to_numpy()
-        )
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaler.fit(target_price_feat_reordered.to_numpy())
+
+        train_set_data_scaled = scaler.transform(train_set_data)
+        validation_set_data_scaled = scaler.transform(validation_set_data)
+        test_data_scaled = scaler.transform(test_data)
 
     x_y_train_dict = windowing(
-        train_set_data, window=window, prediction_scope=prediction_scope
+        train_set_data_scaled, window=window, prediction_scope=prediction_scope
     )
     x_train_data = x_y_train_dict["input"]
     y_train_data = x_y_train_dict["target"]
 
     x_y_val_dict = windowing(
-        validation_set_data, window=window, prediction_scope=prediction_scope
+        validation_set_data_scaled,
+        window=window,
+        prediction_scope=prediction_scope,
     )
     x_val_data = x_y_val_dict["input"]
     y_val_data = x_y_val_dict["target"]
 
-    x_test_data_matrix = test_data[:, :-1]
-    y_test_data_col_vector = test_data[:, -1]
+    x_test_data_matrix = test_data_scaled[:, :-1]
+    y_test_data_col_vector = test_data_scaled[:, -1]
+
+    target_name = target_col + target_suffix
+    target_data = target_price_feat_reordered[target_name].to_numpy()
+    target_min = np.amin(target_data)
+    target_max = np.amax(target_data)
 
     if is_lstm:
         return {
@@ -414,8 +405,10 @@ def data_prep_for_fitting(
             "y_train": y_train_data,
             "x_val": x_val_data,
             "y_val": y_val_data,
-            "x_test": x_test_data_matrix,
+            "x_test": np.expand_dims(x_test_data_matrix, axis=0),
             "y_test": y_test_data_col_vector,
+            "target_min": target_min,
+            "target_max": target_max,
         }
 
     x_train_data_reshaped = x_train_data.reshape(x_train_data.shape[0], -1)
@@ -430,16 +423,106 @@ def data_prep_for_fitting(
         "y_val": y_val_data,
         "x_test": x_test_data_reshaped,
         "y_test": y_test_data_col_vector,
+        "target_min": target_min,
+        "target_max": target_max,
     }
 
 
-def get_val_window_data_size(
+def make_train_val_test_set(
+    df: DataFrame, window: int, percentage: float
+) -> dict[str, np.ndarray]:
+    #                   d = len(target_price)
+    #               d - window          | window
+    # target_price -> nontest_data      | test_data
+    #     percentage | 100 - percentage |
+    #  train_set     |   val_set        |
+    test = df.iloc[-window:].to_numpy()
+    nontest = df.iloc[:-window]
+
+    threshold = int(len(nontest) * percentage)
+
+    train = np.array(nontest.iloc[:threshold])
+    val = np.array(nontest.iloc[threshold:])
+
+    return {"train": train, "val": val, "test": test}
+
+
+def rename_target_col_and_put_it_last(
+    df: DataFrame, target_col: str, suffix: str
+) -> DataFrame:
+    target_col_new_name = target_col + suffix
+    df.rename(columns={target_col: target_col_new_name}, inplace=True)
+    return put_column_to_last(df, target_col_new_name)
+
+
+def check_required_download_size(
     target_price: DataFrame,
     window: int,
     percentage: float,
     prediction_scope: int,
+    shift_max: int,
+    roll_max: int,
+    is_lstm: bool,
+) -> None:
+    if is_lstm:
+        data_size = len(target_price)
+    else:  # because of rolling and shift, there are NaN in data.
+        data_size = len(target_price) - max(shift_max, roll_max - 1)
+    try:
+        val_window_data_size = get_val_window_data_size(
+            data_size, window, percentage, prediction_scope
+        )
+
+        assert val_window_data_size > 0
+        print("Expected val data size:", val_window_data_size)
+    except AssertionError as ae:
+        print(
+            f"Not enough data size, {len(target_price)} for "
+            f"validation window data, ({val_window_data_size} <= 0) "
+            f"for window {window} and percentage {percentage}, "
+            f"prediction scope {prediction_scope}"
+        )
+        raise ae
+
+
+def save_df_json(
+    df: DataFrame, orient: str, save_dir: PosixPath, filename: str
+) -> None:
+    df_json = df.to_json(orient=orient, date_format="iso")
+    loaded_json = json.loads(df_json)
+    save_json(loaded_json, save_dir, filename)
+
+
+def save_json(json_data: dict, save_dir: PosixPath, filename: str) -> None:
+    output = save_dir / filename
+
+    with output.open("w", encoding="UTF-8") as file:
+        json.dump(
+            json_data, file, ensure_ascii=False, indent=2, sort_keys=False
+        )
+
+
+def df_json_reader(json_file: PosixPath, orient: str) -> DataFrame:
+    try:
+        loaded_df = pd.read_json(json_file, orient=orient, dtype=False)
+    except ValueError as no_file:
+        raise FileNotFoundError(
+            f"Input json {json_file} is not found."
+        ) from no_file
+
+    loaded_df.index = pd.to_datetime(loaded_df.index).strftime("%Y-%m-%d")
+    loaded_df.index = loaded_df.index.astype("datetime64[ns]")
+    loaded_df.index.name = "Date"
+
+    return loaded_df
+
+
+def get_val_window_data_size(
+    data_size: int,
+    window: int,
+    percentage: float,
+    prediction_scope: int,
 ) -> int:
-    data_size = len(target_price)
     train_size = data_size - window
     val_size = train_size - int(train_size * percentage)
     val_window_size = val_size - window - prediction_scope
@@ -466,9 +549,13 @@ def setup_lstm_model(
     threshold: float,
 ):
     class myCallback(tf.keras.callbacks.Callback):
-        def on_epoch_end(self, epoch, logs={}):
-            if logs.get("val_mae") < threshold:
-                print("\n Accuracy % so cancelling training")
+        def on_epoch_end(self, epoch, logs=None):
+            if (val_mae := logs.get("val_mae")) < threshold:
+                print("keys in logs", list(logs.keys()))
+                print(
+                    f"MAE for Validation, {val_mae} is lower than "
+                    f"{threshold}. So cancelling training"
+                )
                 self.model.stop_training = True
 
     callbacks = myCallback()
@@ -505,40 +592,3 @@ def setup_lstm_model(
     )
 
     return model
-
-
-def inverse_transformation(
-    X: np.ndarray, y: np.ndarray, y_hat: np.ndarray, scaler: MinMaxScaler
-) -> dict[str, DataFrame]:
-    if X.shape[1] > 1:  # for validation and training data with windowing
-        new_X = []
-
-        for i in range(len(X)):
-            # add every first time data because other time
-            # data are duplicated in the next row
-            new_X.append(X[i][0])
-
-        new_X = np.array(new_X)
-        new_X = pd.DataFrame(new_X)
-
-        y = np.expand_dims(y, axis=1)  # covert row -> col vector
-        y = pd.DataFrame(y)
-        y_hat = pd.DataFrame(y_hat)
-
-    else:  # for testing data without windowing
-        # (30, 1, 67) -> (30, 67)
-        X = X.reshape(X.shape[0], X.shape[1] * X.shape[2])
-        new_X = pd.DataFrame(X)
-
-        y = pd.DataFrame(y)
-        y_hat = pd.DataFrame(y_hat)
-        y_hat = pd.concat((y, y_hat))   # for y_hat no matching features
-        y_hat.index = range(len(y_hat))
-
-    real_val = np.array(pd.concat((new_X, y), axis=1))
-    pred_val = np.array(pd.concat((new_X, y_hat), axis=1))
-
-    real_val = pd.DataFrame(scaler.inverse_transform(real_val))
-    pred_val = pd.DataFrame(scaler.inverse_transform(pred_val))
-
-    return {"real": real_val, "pred": pred_val}
